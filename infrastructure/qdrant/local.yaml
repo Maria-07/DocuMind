@@ -3,6 +3,7 @@
 log_level: INFO
 
 storage:
+  # Fallbacks only: start-qdrant.ps1 sets a short path under %LOCALAPPDATA% (Windows path limits).
   storage_path: ./storage
   snapshots_path: ./snapshots
   # Tenant/ACL payload filters run on every query; keep payload in RAM.

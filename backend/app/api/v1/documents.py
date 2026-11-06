@@ -11,6 +11,8 @@ from app.api.deps import CurrentPrincipal, DocumentServiceDep, Meta, rate_limit_
 from app.models.enums import DocumentVisibility
 from app.schemas.common import ERROR_RESPONSES, Page, PageParams
 from app.schemas.document import (
+    ChunkPage,
+    ChunkRead,
     DocumentDetail,
     DocumentListFilters,
     DocumentRead,
@@ -100,6 +102,29 @@ async def reprocess_document(
     document_id: uuid.UUID, principal: CurrentPrincipal, service: DocumentServiceDep, meta: Meta
 ) -> IngestionJobRead:
     return await service.reprocess(principal, document_id, meta)
+
+
+@router.get(
+    "/{document_id}/chunks",
+    response_model=ChunkPage,
+    summary="Extracted, indexed content of the active version (with page/section/sheet locations)",
+)
+async def list_document_chunks(
+    document_id: uuid.UUID,
+    principal: CurrentPrincipal,
+    service: DocumentServiceDep,
+    page: Annotated[PageParams, Depends()],
+) -> ChunkPage:
+    document, chunks, total = await service.list_chunks(principal, document_id, page)
+    return ChunkPage(
+        document_id=document.id,
+        status=document.status,
+        index_version=document.active_index_version,
+        items=[ChunkRead.model_validate(c) for c in chunks],
+        total=total,
+        page=page.page,
+        page_size=page.page_size,
+    )
 
 
 @router.get("/{document_id}/jobs", response_model=list[IngestionJobRead])

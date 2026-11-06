@@ -12,14 +12,14 @@ from tests.helpers import pdf_bytes
 from tests.integration.api_helpers import register, upload_one
 
 
-class EmptyQdrant:
-    """Qdrant stand-in with no collections (vector deletion is covered with real Qdrant in Phase 3)."""
+class RecordingStore:
+    """Vector-store stand-in recording purges (real Qdrant purge: test_ingestion_pipeline.py)."""
 
     def __init__(self) -> None:
-        self.deleted: list[str] = []
+        self.purged: list[uuid.UUID] = []
 
-    async def collection_exists(self, name: str) -> bool:
-        return False
+    async def delete_document_everywhere(self, document_id: uuid.UUID) -> None:
+        self.purged.append(document_id)
 
 
 async def test_purge_removes_file_only_for_deleted_documents(
@@ -30,16 +30,18 @@ async def test_purge_removes_file_only_for_deleted_documents(
     gone = await upload_one(admin, "gone.pdf", pdf_bytes("gone"))
     await client.delete(f"/api/v1/documents/{gone['id']}", headers=admin.headers)
 
+    store = RecordingStore()
     ctx = {
         "settings": resources.settings,
         "sessionmaker": resources.sessionmaker,
         "storage": resources.storage,
-        "qdrant": EmptyQdrant(),
+        "store": store,
     }
     assert await purge_document(ctx, live["id"]) == "not_deleted"
     assert await purge_document(ctx, gone["id"]) == "purged"
     assert await purge_document(ctx, gone["id"]) == "already_purged"
     assert await purge_document(ctx, str(uuid.uuid4())) == "missing"
+    assert store.purged == [uuid.UUID(gone["id"])]
 
     async with resources.sessionmaker() as s:
         docs = {d.title: d for d in (await s.execute(select(Document))).scalars()}

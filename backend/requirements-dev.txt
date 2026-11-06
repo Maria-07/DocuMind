@@ -6,3 +6,5 @@ fakeredis>=2.26
 ruff>=0.8
 mypy>=1.13
 types-aiofiles
+fpdf2>=2.8                # builds real PDFs for parser tests
+xlwt>=1.3                 # builds real legacy .xls files for parser tests

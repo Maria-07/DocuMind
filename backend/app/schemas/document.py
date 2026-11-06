@@ -24,6 +24,7 @@ class IngestionJobRead(ORMModel):
     attempt: int
     stage: str | None
     error: str | None
+    metrics: dict[str, Any] = Field(default_factory=dict, description="Stage timings, chunk/token counts")
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -105,6 +106,31 @@ class PermissionsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     grants: list[GrantInput] = Field(default_factory=list, max_length=500)
+
+
+class ChunkRead(ORMModel):
+    id: uuid.UUID
+    chunk_index: int
+    kind: str
+    text: str
+    token_count: int
+    page_start: int | None
+    page_end: int | None
+    sheet_name: str | None
+    row_start: int | None
+    row_end: int | None
+    section_path: str | None
+    flags: list[str]
+
+
+class ChunkPage(BaseModel):
+    document_id: uuid.UUID
+    status: DocumentStatus
+    index_version: int
+    items: list[ChunkRead]
+    total: int
+    page: int
+    page_size: int
 
 
 class DocumentListFilters(BaseModel):

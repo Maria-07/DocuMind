@@ -70,6 +70,24 @@ class Settings(BaseSettings):
     max_uncompressed_ooxml_mb: int = Field(default=500, ge=1)
     default_document_visibility: Literal["private", "organization", "restricted"] = "organization"
 
+    # --- Ingestion: embeddings, chunking, parsing ------------------------------------------
+    # A change to any of the embedding/chunking settings defines a *new* embedding config and
+    # Qdrant collection; existing documents keep working until re-indexed (see app.cli reindex).
+    embedding_provider: Literal["fastembed"] = "fastembed"
+    embedding_model: str = "BAAI/bge-base-en-v1.5"
+    # Hugging Face tokenizer used to measure chunk sizes; defaults to the embedding model's.
+    embedding_tokenizer: str | None = None
+    sparse_model: str = "Qdrant/bm25"
+    embedding_batch_size: int = Field(default=32, ge=1, le=512)
+    chunk_size_tokens: int = Field(default=400, ge=64, le=2048)
+    chunk_overlap_tokens: int = Field(default=60, ge=0, le=512)
+    model_cache_dir: Path = Path("./.models")
+    max_pdf_pages: int = Field(default=2000, ge=1)
+    max_sheet_rows: int = Field(default=100_000, ge=1)
+    ingestion_max_tries: int = Field(default=3, ge=1, le=10)
+    worker_max_jobs: int = Field(default=2, ge=1, le=32)
+    worker_job_timeout_seconds: int = Field(default=15 * 60, ge=60)
+
     # --- Rate limiting (per minute) --------------------------------------------------------
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 10
@@ -91,6 +109,16 @@ class Settings(BaseSettings):
             if "*" in self.cors_origin_list:
                 raise ValueError("CORS_ORIGINS must not contain '*' in production")
         return self
+
+    @model_validator(mode="after")
+    def _chunk_overlap_smaller_than_size(self) -> Settings:
+        if self.chunk_overlap_tokens >= self.chunk_size_tokens:
+            raise ValueError("CHUNK_OVERLAP_TOKENS must be smaller than CHUNK_SIZE_TOKENS")
+        return self
+
+    @property
+    def tokenizer_name(self) -> str:
+        return self.embedding_tokenizer or self.embedding_model
 
     @property
     def cors_origin_list(self) -> list[str]:

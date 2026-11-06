@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import aiofiles
 import anyio
@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Permission, Principal
-from app.models import Document, DocumentPermission, IngestionJob
+from app.models import Document, DocumentChunk, DocumentPermission, IngestionJob
 from app.models.enums import (
     DocumentStatus,
     DocumentVisibility,
@@ -46,8 +46,11 @@ from app.schemas.organization import OrganizationSettings
 from app.services.access_policy import can_manage, can_view
 from app.services.audit import RequestMeta, record_audit
 from app.services.file_validation import FileValidationError, detect_file_type, validate_content
-from app.services.job_queue import INGEST_DOCUMENT, PURGE_DOCUMENT, JobQueue
+from app.services.job_queue import INGEST_DOCUMENT, PURGE_DOCUMENT, SYNC_DOCUMENT_PAYLOAD, JobQueue
 from app.services.storage import LocalStorage
+
+if TYPE_CHECKING:
+    from app.rag.vectorstore import QdrantVectorStore
 from app.utils.ids import uuid7
 from app.utils.text import sanitize_filename
 
@@ -81,11 +84,19 @@ def _now() -> datetime:
 
 
 class DocumentService:
-    def __init__(self, session: AsyncSession, settings: Settings, storage: LocalStorage, queue: JobQueue) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings,
+        storage: LocalStorage,
+        queue: JobQueue,
+        vector_store: QdrantVectorStore | None = None,
+    ) -> None:
         self.session = session
         self.settings = settings
         self.storage = storage
         self.queue = queue
+        self.vector_store = vector_store
         self.docs = DocumentRepository(session)
         self.categories = CategoryRepository(session)
         self.orgs = OrganizationRepository(session)
@@ -332,7 +343,8 @@ class DocumentService:
         document, _ = await self._get_visible(principal, document_id)
         if inline and document.file_type is not FileType.PDF:
             raise ConflictError(
-                "Inline preview is currently available for PDF files only", code="preview_not_available"
+                "Inline preview is available for PDF files; use /documents/{id}/chunks for extracted content",
+                code="preview_not_available",
             )
         if not await self.storage.exists(document.storage_key):
             log.error("stored_file_missing", document_id=str(document.id))
@@ -382,6 +394,8 @@ class DocumentService:
             document.visibility = changes["visibility"]
 
         await self.session.commit()
+        if {"title", "category_id", "visibility"} & changes.keys():
+            await self._enqueue_payload_sync(document)
         return DocumentRead.model_validate(document).model_copy(
             update={"can_manage": can_manage(principal, document, grants)}
         )
@@ -401,10 +415,36 @@ class DocumentService:
             details={"title": document.title},
         )
         await self.session.commit()
+        await self._hide_vectors(document)
         try:
             await self.queue.enqueue(PURGE_DOCUMENT, str(document.id), job_id=f"purge:{document.id}")
         except Exception:
             log.exception("enqueue_failed", job="purge", document_id=str(document.id))
+
+    async def _hide_vectors(self, document: Document) -> None:
+        """Best effort: make the document's points unsearchable right away (purge deletes them later).
+
+        Not required for correctness — retrieval re-checks every hit against PostgreSQL — but it keeps
+        deleted content out of candidate lists immediately.
+        """
+        if self.vector_store is None or document.embedding_config_id is None:
+            return
+        try:
+            with anyio.fail_after(3):
+                await self.vector_store.set_document_payload(
+                    self.vector_store.alias, document.id, {"searchable": False}
+                )
+        except Exception:
+            log.warning("hide_vectors_failed", document_id=str(document.id))
+
+    async def _enqueue_payload_sync(self, document: Document) -> None:
+        if document.embedding_config_id is None:  # never indexed: nothing in Qdrant yet
+            return
+        try:
+            await self.queue.enqueue(SYNC_DOCUMENT_PAYLOAD, str(document.id), job_id=f"sync:{document.id}:{uuid7()}")
+        except Exception:
+            # Retrieval re-checks permissions in PostgreSQL, so a missed sync can only narrow results.
+            log.exception("enqueue_failed", job="sync", document_id=str(document.id))
 
     async def reprocess(self, principal: Principal, document_id: uuid.UUID, meta: RequestMeta) -> IngestionJobRead:
         document, _ = await self._get_manageable(principal, document_id)
@@ -487,7 +527,19 @@ class DocumentService:
             details={"grant_count": len(new_grants), "visibility": document.visibility.value},
         )
         await self.session.commit()
+        await self._enqueue_payload_sync(document)
         return document, await self.docs.grants_for(document.id)
+
+    # --- extracted content -----------------------------------------------------------------
+    async def list_chunks(
+        self, principal: Principal, document_id: uuid.UUID, page: PageParams
+    ) -> tuple[Document, list[DocumentChunk], int]:
+        """Chunks of the active index version (the extracted text; also the DOCX/Excel preview)."""
+        document, _ = await self._get_visible(principal, document_id)
+        chunks, total = await self.docs.list_chunks(
+            document.id, document.active_index_version, offset=page.offset, limit=page.page_size
+        )
+        return document, list(chunks), total
 
     # --- access helpers --------------------------------------------------------------------
     async def _get_visible(

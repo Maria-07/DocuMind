@@ -8,7 +8,7 @@ from sqlalchemy import ColumnElement, and_, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import Permission, Principal
-from app.models import Document, DocumentPermission, IngestionJob
+from app.models import Document, DocumentChunk, DocumentPermission, IngestionJob
 from app.models.enums import DocumentVisibility, PrincipalType
 from app.schemas.document import DocumentListFilters
 from app.utils.text import escape_like
@@ -132,6 +132,15 @@ class DocumentRepository:
         await self.session.execute(delete(DocumentPermission).where(DocumentPermission.document_id == document_id))
         await self.session.flush()
         self.session.add_all(grants)
+
+    # --- chunks ----------------------------------------------------------------------------
+    async def list_chunks(
+        self, document_id: uuid.UUID, index_version: int, *, offset: int, limit: int
+    ) -> tuple[Sequence[DocumentChunk], int]:
+        conditions = (DocumentChunk.document_id == document_id, DocumentChunk.index_version == index_version)
+        total = await self.session.scalar(select(func.count()).select_from(DocumentChunk).where(*conditions))
+        stmt = select(DocumentChunk).where(*conditions).order_by(DocumentChunk.chunk_index).offset(offset).limit(limit)
+        return (await self.session.execute(stmt)).scalars().all(), int(total or 0)
 
     # --- jobs ------------------------------------------------------------------------------
     async def latest_job(self, document_id: uuid.UUID) -> IngestionJob | None:

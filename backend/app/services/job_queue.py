@@ -25,3 +25,4 @@ class ArqJobQueue:
 # Job function names (implemented in app.workers.tasks).
 INGEST_DOCUMENT = "ingest_document"
 PURGE_DOCUMENT = "purge_document"
+SYNC_DOCUMENT_PAYLOAD = "sync_document_payload"

@@ -57,6 +57,9 @@ def configure_logging(level: str = "INFO", json_logs: bool = True) -> None:
         logging.getLogger(name).propagate = True
     # Request logging is done by RequestContextMiddleware (with request ids, without query strings).
     logging.getLogger("uvicorn.access").disabled = True
+    # Outbound HTTP clients (Qdrant, model downloads) log every request at INFO: too noisy.
+    for name in ("httpx", "httpcore", "huggingface_hub"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

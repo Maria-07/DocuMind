@@ -12,17 +12,28 @@ built-in RAG evaluation framework.
 |---|---|---|
 | 1 | Architecture & design | ✅ done |
 | 2 | Backend foundation: FastAPI, PostgreSQL + migrations, auth (JWT + rotating refresh tokens), RBAC, organizations/users/groups/categories, document upload & management APIs, audit log, rate limiting | ✅ done |
-| 3 | Ingestion pipeline: parsing, chunking, embeddings, Qdrant indexing, background processing | ⏳ next |
-| 4 | RAG: hybrid retrieval, reranking, grounded generation with citations | — |
+| 3 | Ingestion pipeline: PDF/DOCX/XLSX/XLS parsing, structure- and token-aware chunking, local dense + BM25 embeddings, Qdrant indexing with ACL payloads, background worker with retries | ✅ done |
+| 4 | RAG: hybrid retrieval, reranking, grounded generation with citations | ⏳ next |
 | 5 | Frontend (Next.js) | — |
 | 6 | Comparison, conversations, analytics, evaluation | — |
 | 7 | Hardening, deployment | — |
 
-**What works today (Phase 2):** registration/login/refresh/logout, role- and grant-based
-document access, uploads with content validation and de-duplication, listing/search/filter,
-download/preview (PDF), soft delete with background purge, reprocess requests, audit logging.
-Uploaded documents stay in status `uploaded` until the Phase 3 worker indexes them; ingestion jobs
-are already queued for it.
+**What works today:** registration/login/refresh/logout, role- and grant-based document access,
+uploads with content validation and de-duplication, listing/search/filter, download/preview, soft
+delete with purge, audit logging — and **ingestion**: every upload is parsed, chunked, embedded and
+indexed in Qdrant by the worker (`uploaded → processing → indexed | failed`). Extracted content with
+page / section / sheet + row locations is available at `GET /documents/{id}/chunks`.
+
+### Ingestion at a glance
+
+| Step | Implementation |
+|---|---|
+| Parse | PDF: pdfplumber (MIT) — page text + tables as Markdown, metadata, scanned-page detection · DOCX: python-docx — heading hierarchy → section paths, tables · XLSX: openpyxl · XLS: xlrd — one `Header: value` record per row |
+| Chunk | LangChain `RecursiveCharacterTextSplitter` measured in **model tokens**; never crosses page/section/sheet boundaries; tables and row groups repeat their header |
+| Embed | fastembed (local ONNX): `BAAI/bge-base-en-v1.5` dense (768-d) + `Qdrant/bm25` sparse — no API key needed |
+| Index | Qdrant collection per embedding config (`dm_<model>_<chunking>_<hash>`), alias `chunks_active`; payload carries org, ACL tokens, page/section/sheet/rows, text |
+| Safety | Points written `searchable=false`, flipped only when the whole version is stored; old version serves until the new one is complete; deletes hide vectors immediately and purge them; prompt-injection-like chunks are flagged |
+| Reliability | arq worker, retries with exponential backoff for transient errors, permanent failures (encrypted/corrupt/no text) reported clearly, sweep recovers lost or stuck jobs every 5 minutes |
 
 ## Repository layout
 
@@ -82,6 +93,19 @@ uvicorn app.main:create_app --factory --reload          # API on http://localhos
 arq app.workers.settings.WorkerSettings                  # worker (separate terminal)
 ```
 
+The worker downloads the embedding models into `MODEL_CACHE_DIR` (default `backend/.models`,
+~220 MB) on its first start, then registers the active embedding config, creates the Qdrant
+collection and points the `chunks_active` alias at it.
+
+After changing `EMBEDDING_MODEL`, `SPARSE_MODEL`, `CHUNK_SIZE_TOKENS` or `CHUNK_OVERLAP_TOKENS`
+(which creates a new collection), re-index:
+
+```bash
+python -m app.cli reindex --stale     # documents not on the active embedding config
+python -m app.cli reindex --failed    # retry failed documents
+python -m app.cli reindex --all       # everything (e.g. after a parser improvement)
+```
+
 Health: `GET /health` (liveness), `GET /ready` (PostgreSQL, Redis, Qdrant reachability).
 
 ## Tests
@@ -89,7 +113,10 @@ Health: `GET /health` (liveness), `GET /ready` (PostgreSQL, Redis, Qdrant reacha
 ```bash
 cd backend
 pytest tests/unit                                    # no services needed
-TEST_DATABASE_URL=postgresql+asyncpg://documind:change-me@localhost:5432/documind_test pytest
+TEST_DATABASE_URL=postgresql+asyncpg://documind:change-me@localhost:5432/documind_test \
+TEST_QDRANT_URL=http://localhost:6333 \
+RUN_MODEL_TESTS=1 \
+pytest                                               # everything, incl. real-model retrieval test
 ```
 
 Integration tests run the real Alembic migrations against `TEST_DATABASE_URL` and **wipe that

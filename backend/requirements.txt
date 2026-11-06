@@ -16,3 +16,12 @@ arq>=0.26
 qdrant-client>=1.12
 aiofiles>=24.1
 anyio>=4.6
+# Phase 3: ingestion
+pdfplumber>=0.11          # MIT (PyMuPDF avoided: AGPL)
+python-docx>=1.1
+openpyxl>=3.1
+xlrd>=2.0                 # legacy .xls only
+langchain-text-splitters>=1.0
+fastembed>=0.9            # local ONNX dense + BM25 sparse embeddings
+tokenizers>=0.20
+huggingface-hub>=0.26

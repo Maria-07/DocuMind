@@ -6,6 +6,8 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 backend/storage/
+backend/.models/
+.models/
 storage/
 infrastructure/qdrant/bin/
 infrastructure/qdrant/storage/

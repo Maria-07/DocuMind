@@ -145,7 +145,7 @@ flowchart TD
   Q --> A202[202 Accepted<br/>doc + job id]
 
   Q -.-> W1[Worker: status=PROCESSING]
-  W1 --> P[Parse by type<br/>PDF: PyMuPDF pages + tables<br/>DOCX: python-docx headings/tables<br/>XLSX: openpyxl · XLS: xlrd]
+  W1 --> P[Parse by type<br/>PDF: pdfplumber pages + tables<br/>DOCX: python-docx headings/tables<br/>XLSX: openpyxl · XLS: xlrd]
   P --> M[Normalize to ParsedDocument<br/>blocks with page / sheet / section_path]
   M --> C[Structure-aware, token-aware chunking]
   C --> PGC[Insert document_chunks<br/>for index_version]
@@ -163,7 +163,7 @@ flowchart TD
 **Validation.** Extension allow-list (`.pdf .docx .xlsx .xls`) **and** magic-byte sniffing (`%PDF`, ZIP container with `word/` or `xl/` parts, OLE2 for `.xls`). Max size configurable (default 50 MB/file, 20 files/request). Files are streamed to disk in chunks — never fully buffered in memory. Macro-enabled formats are rejected. ZIP-bomb guard: cap total uncompressed size for OOXML.
 
 **Parsing → `ParsedDocument`.** Each parser returns a list of `Block(text, kind=paragraph|heading|table|sheet_rows, page, sheet, section_path, bbox?)` plus document metadata (title, author, created/modified dates, page_count, sheet names).
-- **PDF (PyMuPDF):** per-page text with layout order; `page.find_tables()` → tables rendered as Markdown; heading detection from font-size heuristics for `section_path`. Pages with almost no text are flagged `needs_ocr` (OCR is a stretch goal; the document is still indexed with what exists and the UI shows a warning).
+- **PDF (pdfplumber, MIT — PyMuPDF was avoided because it is AGPL):** per-page text; `page.find_tables()` → tables rendered as Markdown and removed from the page prose so they aren't indexed twice; title/author/dates from the PDF info dictionary. Citations use page numbers (no `section_path` for PDFs; font-size heading detection is a possible later improvement). Pages with almost no text are listed in the document's `warnings`; a PDF with no extractable text at all fails with `no_text` (OCR is out of scope for v1). Encrypted PDFs fail with `encrypted_pdf`.
 - **DOCX (python-docx):** walk body in order; `Heading N` styles build `section_path` ("Security > Access Control"); tables → Markdown. No page numbers in DOCX (they're a rendering artifact) → citations use section instead.
 - **XLSX/XLS:** per sheet, detect header row, emit rows as `col: value` records; computed values (not formulas) via `data_only=True`; hidden sheets included but flagged; very large sheets capped with a warning.
 
@@ -373,7 +373,7 @@ erDiagram
 
 ## 5. Qdrant collection & payload design
 
-**Collection naming:** `chunks__{embedding_config_name}` (e.g. `chunks__bge-base-512-64`), with alias **`chunks_active`** pointing at the live one. Re-embedding or re-chunking builds a new collection in the background; switching is an atomic alias swap; eval runs can target any collection explicitly.
+**Collection naming:** `dm_<model>_<size>-<overlap>_<hash8>` (e.g. `dm_bge-base-en-v1-5_400-60_e5c51e41`; the hash covers model, sparse model and chunking), with alias **`chunks_active`** pointing at the live one. Names are deliberately short: Qdrant nests several directory levels per collection and the Windows build is limited to 260-character paths. Re-embedding or re-chunking builds a new collection in the background; switching is an atomic alias swap; eval runs can target any collection explicitly.
 
 **Vectors:**
 ```json

@@ -92,6 +92,10 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Set by the purge worker once the stored file and vectors are gone.
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Which embedding config (Qdrant collection) holds this document's active vectors.
+    embedding_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("embedding_configs.id", ondelete="SET NULL")
+    )
 
 
 class DocumentPermission(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
