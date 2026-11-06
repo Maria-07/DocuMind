@@ -1,0 +1,15 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+backend/storage/
+storage/
+infrastructure/qdrant/bin/
+infrastructure/qdrant/storage/
+infrastructure/qdrant/snapshots/
+infrastructure/qdrant/.qdrant-initialized
+node_modules/
+.next/

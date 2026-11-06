@@ -1,0 +1,7 @@
+# Qdrant overrides for DocuMind (merged over the image defaults).
+service:
+  enable_cors: false
+telemetry_disabled: true
+storage:
+  # Payload filtering on tenant/ACL fields is on every query; keep payload indexes in RAM.
+  on_disk_payload: false

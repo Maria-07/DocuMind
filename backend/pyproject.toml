@@ -1,0 +1,36 @@
+[project]
+name = "documind-backend"
+version = "0.1.0"
+description = "DocuMind - Enterprise Document Intelligence Platform (API + workers)"
+requires-python = ">=3.12"
+readme = "../README.md"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = [
+    "S101",   # asserts are fine in tests
+    "B008",   # FastAPI Depends() in defaults is idiomatic
+    "RUF012", # class-level mutable defaults used by arq WorkerSettings
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]
+"alembic/**" = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "integration: requires a PostgreSQL database (TEST_DATABASE_URL)",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true

@@ -1,0 +1,10 @@
+# Store text files with LF in the repository (Dockerfiles and container scripts require it).
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.xls binary
+*.zip binary

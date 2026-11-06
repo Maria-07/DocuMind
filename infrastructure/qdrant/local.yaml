@@ -1,0 +1,18 @@
+# Qdrant config for running the native binary (infrastructure/qdrant/start-qdrant.ps1).
+# Paths are relative to the working directory the script sets (infrastructure/qdrant).
+log_level: INFO
+
+storage:
+  storage_path: ./storage
+  snapshots_path: ./snapshots
+  # Tenant/ACL payload filters run on every query; keep payload in RAM.
+  on_disk_payload: false
+
+service:
+  host: 127.0.0.1   # local only; never expose an unauthenticated Qdrant
+  http_port: 6333
+  grpc_port: 6334
+  enable_cors: false
+  # API key: set QDRANT__SERVICE__API_KEY in the environment (and QDRANT_API_KEY for the app).
+
+telemetry_disabled: true
