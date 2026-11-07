@@ -25,7 +25,7 @@ from app.rag.vectorstore import DENSE, SPARSE
 from app.services.access_policy import principal_acl_tokens
 from tests.documents import build_docx, build_xlsx
 from tests.integration.api_helpers import register, upload_one
-from tests.integration.test_ingestion_pipeline import _latest_job
+from tests.integration.rag_helpers import latest_job as _latest_job
 
 TEST_QDRANT_URL = os.environ.get("TEST_QDRANT_URL")
 MODEL_CACHE = Path(__file__).resolve().parents[2] / ".models"

@@ -10,14 +10,17 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.errors import AuthenticationError, PermissionDeniedError, RateLimitedError
+from app.core.errors import AuthenticationError, PermissionDeniedError, RateLimitedError, ServiceUnavailableError
 from app.core.permissions import Permission, Principal, permissions_for
 from app.core.resources import AppResources
 from app.core.security import decode_access_token
+from app.rag.runtime import RagRuntime
 from app.repositories.users import UserRepository
 from app.schemas.organization import OrganizationSettings
 from app.services.audit import RequestMeta
+from app.services.chat import ChatService
 from app.services.documents import DocumentService
+from app.services.search import SearchService
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /auth/login or /auth/refresh")
 
@@ -131,3 +134,21 @@ def get_document_service(session: DbSession, resources: Resources) -> DocumentSe
 
 
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
+
+
+def _rag(resources: AppResources) -> RagRuntime:
+    if resources.rag is None:
+        raise ServiceUnavailableError("Retrieval is not available", code="retrieval_unavailable")
+    return resources.rag
+
+
+def get_chat_service(resources: Resources) -> ChatService:
+    return ChatService(resources.sessionmaker, resources.settings, _rag(resources))
+
+
+def get_search_service(resources: Resources) -> SearchService:
+    return SearchService(resources.sessionmaker, _rag(resources).retriever)
+
+
+ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
+SearchServiceDep = Annotated[SearchService, Depends(get_search_service)]

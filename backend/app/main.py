@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -19,6 +22,21 @@ from app.core.resources import AppResources, build_resources
 
 _JSON_BODY_LIMIT = 2 * 1024 * 1024
 _MULTIPART_OVERHEAD = 1024 * 1024
+log = structlog.get_logger(__name__)
+
+
+async def _warm_up(resources: AppResources) -> None:
+    assert resources.rag is not None
+    retriever = resources.rag.retriever
+    started = time.perf_counter()
+    try:
+        await retriever.embedder.embed_query("warm up")
+        await retriever.sparse.encode_query("warm up")
+        if retriever.reranker is not None:
+            await retriever.reranker.score("warm up", ["warm up"])
+        log.info("models_warmed_up", seconds=round(time.perf_counter() - started, 1))
+    except Exception:  # warm-up is an optimisation; the first real query loads models anyway
+        log.warning("model_warm_up_failed")
 
 
 def create_app(settings: Settings | None = None, resources: AppResources | None = None) -> FastAPI:
@@ -29,12 +47,18 @@ def create_app(settings: Settings | None = None, resources: AppResources | None 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned = None
+        warmup: asyncio.Task[None] | None = None
         if resources is None:
             owned = await build_resources(settings)
             app.state.resources = owned
+            if owned.rag is not None:
+                # Load embedding/reranker models in the background so the first query isn't slow.
+                warmup = asyncio.create_task(_warm_up(owned))
         try:
             yield
         finally:
+            if warmup is not None and not warmup.done():
+                warmup.cancel()
             if owned is not None:
                 await owned.aclose()
 

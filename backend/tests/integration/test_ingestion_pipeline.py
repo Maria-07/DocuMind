@@ -6,167 +6,26 @@ models are exercised in test_real_models.py.
 
 from __future__ import annotations
 
-import os
 import uuid
-import zlib
-from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
-from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
 from sqlalchemy import select, update
 
 from app.core.resources import AppResources
 from app.models import Document, DocumentChunk, DocumentPermission, IngestionJob
 from app.models.enums import DocumentStatus, JobStatus
-from app.rag.embeddings.base import SparseVector
 from app.rag.ingestion.pipeline import IngestionPipeline, RetryLater
-from app.rag.setup import build_ingestion_pipeline
 from app.services.access_policy import document_acl_tokens
 from app.workers.tasks import purge_document, sweep_jobs, sync_document_payload
 from tests.documents import build_docx, build_pdf, build_xlsx
+from tests.fakes import HashEmbedder
 from tests.integration.api_helpers import Session, register, upload_one
-
-TEST_QDRANT_URL = os.environ.get("TEST_QDRANT_URL")
-pytestmark = pytest.mark.skipif(not TEST_QDRANT_URL, reason="TEST_QDRANT_URL not set")
-
-DIM = 64
-
-
-def _tokens(text: str) -> list[str]:
-    return [w.strip(".,:;|()").lower() for w in text.split() if w.strip(".,:;|()")]
-
-
-class HashEmbedder:
-    """Deterministic bag-of-words hashing embedder (a real EmbeddingProvider, just not a neural one)."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-        self.before_call: Callable[[], Any] | None = None
-
-    @property
-    def model_id(self) -> str:
-        return "test/hash-embedder"
-
-    async def dimension(self) -> int:
-        return DIM
-
-    def _vec(self, text: str) -> list[float]:
-        v = [0.0] * DIM
-        for t in _tokens(text):
-            v[zlib.crc32(t.encode()) % DIM] += 1.0
-        norm = sum(x * x for x in v) ** 0.5 or 1.0
-        return [x / norm for x in v]
-
-    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        self.calls += 1
-        if self.before_call is not None:
-            result = self.before_call()
-            if hasattr(result, "__await__"):
-                await result
-        return [self._vec(t) for t in texts]
-
-    async def embed_query(self, text: str) -> list[float]:
-        return self._vec(text)
-
-
-class HashSparse:
-    @property
-    def model_id(self) -> str:
-        return "test/hash-sparse"
-
-    def _enc(self, text: str) -> SparseVector:
-        counts: dict[int, float] = {}
-        for t in _tokens(text):
-            i = zlib.crc32(t.encode()) % 100_000
-            counts[i] = counts.get(i, 0.0) + 1.0
-        return SparseVector(indices=list(counts), values=list(counts.values()))
-
-    async def encode_documents(self, texts: list[str]) -> list[SparseVector]:
-        return [self._enc(t) for t in texts]
-
-    async def encode_query(self, text: str) -> SparseVector:
-        return self._enc(text)
-
-
-class WordCounter:
-    def count(self, text: str) -> int:
-        return len(text.split())
-
-
-# --- fixtures ------------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def qdrant() -> AsyncIterator[AsyncQdrantClient]:
-    client = AsyncQdrantClient(url=TEST_QDRANT_URL)
-    yield client
-    await client.close()
-
-
-@pytest.fixture
-def embedder() -> HashEmbedder:
-    return HashEmbedder()
-
-
-@pytest.fixture
-async def pipeline(
-    resources: AppResources, qdrant: AsyncQdrantClient, embedder: HashEmbedder
-) -> AsyncIterator[IngestionPipeline]:
-    tag = uuid.uuid4().hex[:8]
-    resources.settings.embedding_model = f"test/hash-{tag}"
-    resources.settings.qdrant_collection_alias = f"test_alias_{tag}"
-    resources.settings.chunk_size_tokens, resources.settings.chunk_overlap_tokens = 80, 10
-    resources.settings.ingestion_max_tries = 3
-    p = await build_ingestion_pipeline(
-        settings=resources.settings,
-        sessionmaker=resources.sessionmaker,
-        storage=resources.storage,
-        qdrant=qdrant,
-        embedder=embedder,
-        sparse=HashSparse(),
-        token_counter=WordCounter(),
-    )
-    resources.vector_store = p.store  # the API hides vectors of deleted documents through it
-    yield p
-    try:
-        await qdrant.update_collection_aliases(
-            change_aliases_operations=[qm.DeleteAliasOperation(delete_alias=qm.DeleteAlias(alias_name=p.store.alias))]
-        )
-    except Exception:  # noqa: S110 - alias may not exist
-        pass
-    await qdrant.delete_collection(p.collection)
-
-
-@pytest.fixture
-def ctx(resources: AppResources, pipeline: IngestionPipeline) -> dict[str, Any]:
-    return {
-        "settings": resources.settings,
-        "sessionmaker": resources.sessionmaker,
-        "storage": resources.storage,
-        "pipeline": pipeline,
-        "store": pipeline.store,
-    }
-
-
-async def _latest_job(resources: AppResources, document_id: str) -> IngestionJob:
-    async with resources.sessionmaker() as s:
-        return (
-            await s.execute(
-                select(IngestionJob)
-                .where(IngestionJob.document_id == uuid.UUID(document_id))
-                .order_by(IngestionJob.created_at.desc(), IngestionJob.id.desc())
-                .limit(1)
-            )
-        ).scalar_one()
-
-
-async def _run(pipeline: IngestionPipeline, resources: AppResources, document_id: str, attempt: int = 1) -> str:
-    job = await _latest_job(resources, document_id)
-    return await pipeline.run(uuid.UUID(document_id), job.id, attempt=attempt)
+from tests.integration.rag_helpers import latest_job as _latest_job
+from tests.integration.rag_helpers import run_ingestion as _run
 
 
 async def _doc(resources: AppResources, document_id: str) -> Document:

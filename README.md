@@ -13,7 +13,7 @@ built-in RAG evaluation framework.
 | 1 | Architecture & design | ✅ done |
 | 2 | Backend foundation: FastAPI, PostgreSQL + migrations, auth (JWT + rotating refresh tokens), RBAC, organizations/users/groups/categories, document upload & management APIs, audit log, rate limiting | ✅ done |
 | 3 | Ingestion pipeline: PDF/DOCX/XLSX/XLS parsing, structure- and token-aware chunking, local dense + BM25 embeddings, Qdrant indexing with ACL payloads, background worker with retries | ✅ done |
-| 4 | RAG: hybrid retrieval, reranking, grounded generation with citations | ⏳ next |
+| 4 | RAG: permission-aware hybrid retrieval, cross-encoder reranking, grounded streaming answers with validated citations, conversations, search API, retrieval-accuracy benchmark | ✅ done (real-LLM test pending an API key) |
 | 5 | Frontend (Next.js) | — |
 | 6 | Comparison, conversations, analytics, evaluation | — |
 | 7 | Hardening, deployment | — |
@@ -34,6 +34,35 @@ page / section / sheet + row locations is available at `GET /documents/{id}/chun
 | Index | Qdrant collection per embedding config (`dm_<model>_<chunking>_<hash>`), alias `chunks_active`; payload carries org, ACL tokens, page/section/sheet/rows, text |
 | Safety | Points written `searchable=false`, flipped only when the whole version is stored; old version serves until the new one is complete; deletes hide vectors immediately and purge them; prompt-injection-like chunks are flagged |
 | Reliability | arq worker, retries with exponential backoff for transient errors, permanent failures (encrypted/corrupt/no text) reported clearly, sweep recovers lost or stuck jobs every 5 minutes |
+
+### Retrieval & answers at a glance
+
+| Step | Implementation |
+|---|---|
+| Retrieve | Dense + BM25 in one Qdrant query, fused with RRF. The filter (org, searchable, ACL tokens, optional scope) is built only from the server-side user — never from request input |
+| Re-check | Every hit is re-verified in PostgreSQL (document live, user may view it, active index version), so a stale vector payload can only narrow results |
+| Rerank | `BAAI/bge-reranker-base` cross-encoder on the top 20; relevance threshold decides "not found" (the LLM is then not called); max 4 chunks per document; token budget |
+| Generate | `LLM_PROVIDER=anthropic` (default `claude-opus-5-5`): each chunk is a citable `document` (one block per sentence/row) using Claude's native citations, so citations point at exact passages; system prompt cached; refusal fallback. `LLM_PROVIDER=openai` (e.g. `gpt-5-nano`): Responses API with `store=False`; numbered `<source>` blocks cited with inline `[n]` markers (per-chunk granularity). Both stream |
+| Cite | Every citation is validated against the chunk it claims to quote; invalid ones are dropped and counted. Answers carry `[n]` markers; citations include document, page / section / sheet + rows, snippet and a link |
+| Safety | Retrieved text is data, never instructions (prompt + no tools); injection-like chunks are flagged to the model; document facts and "**Interpretation:**" are kept apart |
+
+**Measured retrieval accuracy** (`tests/integration/test_retrieval_accuracy.py`: 12 paraphrased
+questions over 4 documents / 35 chunks with near-miss distractors, real models):
+
+| Configuration | Recall@1 | Recall@5 | MRR | NDCG@5 |
+|---|---|---|---|---|
+| semantic | 0.92 | 1.00 | 0.94 | 0.96 |
+| hybrid | 0.83 | 1.00 | 0.89 | 0.92 |
+| hybrid + bge-reranker-base (default) | 0.92 | 1.00 | **0.96** | **0.97** |
+
+Rerankers compared on the same set: MiniLM-L-12 MRR 0.92, jina-turbo 0.62, bge-reranker-base 0.96.
+The set is small (each question ≈ 0.08 Recall@1): it guards against regressions, the Phase 6
+evaluation module measures quality on real document sets.
+
+**Chat API:** `POST /chat/conversations` → `POST /chat/conversations/{id}/messages` with
+`Accept: text/event-stream` streams `meta`, `status`, `sources`, `token`, `citation`, `done`
+(or `error`) events; without it the complete answer is returned as JSON. Conversations are private to
+their owner. **Search API:** `POST /search/hybrid`, `/search/semantic`, `/search/documents`.
 
 ## Repository layout
 
@@ -116,7 +145,11 @@ pytest tests/unit                                    # no services needed
 TEST_DATABASE_URL=postgresql+asyncpg://documind:change-me@localhost:5432/documind_test \
 TEST_QDRANT_URL=http://localhost:6333 \
 RUN_MODEL_TESTS=1 \
-pytest                                               # everything, incl. real-model retrieval test
+pytest                                               # everything, incl. real-model retrieval tests
+
+# Real answers from the configured LLM (needs its API key; cents per run):
+RUN_LLM_TESTS=1 TEST_QDRANT_URL=http://localhost:6333 pytest tests/integration/test_real_answers.py -s
+#   uses LLM_PROVIDER / LLM_MODEL / OPENAI_API_KEY or ANTHROPIC_API_KEY from the environment
 ```
 
 Integration tests run the real Alembic migrations against `TEST_DATABASE_URL` and **wipe that

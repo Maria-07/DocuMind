@@ -35,7 +35,10 @@ def test_uuid7_version_and_ordering() -> None:
     second = uuid7()
     assert first.version == 7 and first.variant == uuid.RFC_4122
     assert first < second  # time-ordered across milliseconds
-    assert len({uuid7() for _ in range(1000)}) == 1000
+    burst = [uuid7() for _ in range(10_000)]  # many per millisecond
+    assert len(set(burst)) == len(burst)
+    assert burst == sorted(burst)  # monotonic within the process, even inside one millisecond
+    assert all(u.version == 7 for u in burst)
 
 
 @pytest.mark.parametrize(

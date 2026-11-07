@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.core.config import Settings
 from app.core.rate_limit import RateLimiter
 from app.db.session import create_engine, create_sessionmaker
+from app.rag.runtime import RagRuntime, build_rag_runtime
 from app.rag.vectorstore import QdrantVectorStore
 from app.services.job_queue import ArqJobQueue, JobQueue
 from app.services.storage import LocalStorage
@@ -32,6 +33,7 @@ class AppResources:
     redis: Redis | None = None
     qdrant: AsyncQdrantClient | None = None
     vector_store: QdrantVectorStore | None = None
+    rag: RagRuntime | None = None
     owns_connections: bool = True
 
     async def aclose(self) -> None:
@@ -53,15 +55,17 @@ async def build_resources(settings: Settings) -> AppResources:
         api_key=settings.qdrant_api_key.get_secret_value() if settings.qdrant_api_key else None,
         timeout=10,
     )
+    sessionmaker = create_sessionmaker(engine)
     log.info("resources_ready", environment=settings.environment)
     return AppResources(
         settings=settings,
         engine=engine,
-        sessionmaker=create_sessionmaker(engine),
+        sessionmaker=sessionmaker,
         storage=LocalStorage(settings.storage_local_path),
         job_queue=ArqJobQueue(arq_pool),
         rate_limiter=RateLimiter(arq_pool, enabled=settings.rate_limit_enabled),
         redis=arq_pool,
         qdrant=qdrant,
         vector_store=QdrantVectorStore(qdrant, settings.qdrant_collection_alias),
+        rag=build_rag_runtime(settings, sessionmaker, qdrant),
     )

@@ -25,3 +25,6 @@ langchain-text-splitters>=1.0
 fastembed>=0.9            # local ONNX dense + BM25 sparse embeddings
 tokenizers>=0.20
 huggingface-hub>=0.26
+# Phase 4: generation
+anthropic>=2.6
+openai>=3.40              # LLM_PROVIDER=openai

@@ -88,6 +88,36 @@ class Settings(BaseSettings):
     worker_max_jobs: int = Field(default=2, ge=1, le=32)
     worker_job_timeout_seconds: int = Field(default=15 * 60, ge=60)
 
+    # --- Retrieval (Phase 4) --------------------------------------------------------------
+    reranker_enabled: bool = True
+    # Chosen by tests/integration/test_retrieval_accuracy.py: the only reranker tested that improved
+    # on no reranking (MRR 0.96 vs 0.94; MiniLM-L-12 0.92, jina-turbo 0.62). ~2.7 s for 20 passages on CPU.
+    reranker_model: str = "BAAI/bge-reranker-base"
+    rerank_candidates: int = Field(default=20, ge=1, le=200)  # top fused hits that get reranked
+    retrieval_candidates: int = Field(default=40, ge=5, le=200)  # per branch, before fusion
+    retrieval_top_n: int = Field(default=8, ge=1, le=50)  # chunks given to the LLM
+    # Minimum reranker relevance (0-1, sigmoid of the cross-encoder logit). Below it: "not found".
+    # Calibrated for bge-reranker-base in test_retrieval_accuracy.py: answerable questions' top hit
+    # scored >= 9.5e-3, unanswerable ones <= 3.8e-4. Re-calibrate when changing RERANKER_MODEL.
+    retrieval_min_relevance: float = Field(default=0.002, ge=0.0, le=1.0)
+    retrieval_max_chunks_per_document: int = Field(default=4, ge=1, le=50)
+    context_max_tokens: int = Field(default=6000, ge=500, le=100_000)
+
+    # --- Generation (Phase 4) -------------------------------------------------------------
+    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    anthropic_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    llm_model: str = "claude-opus-5-5"
+    # Reasoning effort. "none"/"minimal" are OpenAI-only (mapped to "low" for Claude).
+    llm_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] = "medium"
+    llm_max_tokens: int = Field(default=8000, ge=256, le=128_000)
+    # Server-side refusal fallback (Claude API): a policy decline is retried on a fallback model.
+    llm_refusal_fallback: bool = True
+    llm_timeout_seconds: float = Field(default=120, ge=5)
+    chat_history_turns: int = Field(default=6, ge=0, le=50)
+    rate_limit_chat_per_minute: int = 20
+    rate_limit_search_per_minute: int = 60
+
     # --- Rate limiting (per minute) --------------------------------------------------------
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 10
@@ -115,6 +145,20 @@ class Settings(BaseSettings):
         if self.chunk_overlap_tokens >= self.chunk_size_tokens:
             raise ValueError("CHUNK_OVERLAP_TOKENS must be smaller than CHUNK_SIZE_TOKENS")
         return self
+
+    @model_validator(mode="after")
+    def _llm_model_matches_provider(self) -> Settings:
+        model = self.llm_model.lower()
+        if self.llm_provider == "openai" and model.startswith("claude"):
+            raise ValueError("LLM_PROVIDER=openai but LLM_MODEL is a Claude model; set LLM_MODEL (e.g. gpt-5-nano)")
+        if self.llm_provider == "anthropic" and model.startswith(("gpt", "o1", "o3", "o4")):
+            raise ValueError("LLM_PROVIDER=anthropic but LLM_MODEL is an OpenAI model; set LLM_PROVIDER=openai")
+        return self
+
+    @property
+    def llm_configured(self) -> bool:
+        key = self.openai_api_key if self.llm_provider == "openai" else self.anthropic_api_key
+        return key is not None and bool(key.get_secret_value())
 
     @property
     def tokenizer_name(self) -> str:

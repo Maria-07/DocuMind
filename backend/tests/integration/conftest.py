@@ -138,3 +138,72 @@ def make_client(resources: AppResources):  # type: ignore[no-untyped-def]
 
     yield _make
     # Clients are closed by the event loop teardown; ASGITransport holds no sockets.
+
+
+# --- RAG fixtures (need TEST_QDRANT_URL) ----------------------------------------------------
+
+TEST_QDRANT_URL = os.environ.get("TEST_QDRANT_URL")
+
+
+@pytest.fixture
+async def qdrant() -> AsyncIterator[Any]:
+    if not TEST_QDRANT_URL:
+        pytest.skip("TEST_QDRANT_URL not set")
+    from qdrant_client import AsyncQdrantClient
+
+    client = AsyncQdrantClient(url=TEST_QDRANT_URL)
+    yield client
+    await client.close()
+
+
+@pytest.fixture
+def embedder() -> Any:
+    from tests.fakes import HashEmbedder
+
+    return HashEmbedder()
+
+
+@pytest.fixture
+async def pipeline(resources: AppResources, qdrant: Any, embedder: Any) -> AsyncIterator[Any]:
+    """Ingestion pipeline on a throw-away Qdrant collection + alias, with deterministic embeddings."""
+    import uuid
+
+    from qdrant_client.http import models as qm
+
+    from app.rag.setup import build_ingestion_pipeline
+    from tests.fakes import HashSparse, WordCounter
+
+    tag = uuid.uuid4().hex[:8]
+    resources.settings.embedding_model = f"test/hash-{tag}"
+    resources.settings.qdrant_collection_alias = f"test_alias_{tag}"
+    resources.settings.chunk_size_tokens, resources.settings.chunk_overlap_tokens = 80, 10
+    resources.settings.ingestion_max_tries = 3
+    p = await build_ingestion_pipeline(
+        settings=resources.settings,
+        sessionmaker=resources.sessionmaker,
+        storage=resources.storage,
+        qdrant=qdrant,
+        embedder=embedder,
+        sparse=HashSparse(),
+        token_counter=WordCounter(),
+    )
+    resources.vector_store = p.store  # the API hides vectors of deleted documents through it
+    yield p
+    try:
+        await qdrant.update_collection_aliases(
+            change_aliases_operations=[qm.DeleteAliasOperation(delete_alias=qm.DeleteAlias(alias_name=p.store.alias))]
+        )
+    except Exception:  # noqa: S110 - alias may not exist
+        pass
+    await qdrant.delete_collection(p.collection)
+
+
+@pytest.fixture
+def ctx(resources: AppResources, pipeline: Any) -> dict[str, Any]:
+    return {
+        "settings": resources.settings,
+        "sessionmaker": resources.sessionmaker,
+        "storage": resources.storage,
+        "pipeline": pipeline,
+        "store": pipeline.store,
+    }
