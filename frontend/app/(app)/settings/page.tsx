@@ -15,6 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { useCategoryMutations, useChangePassword, useOrganization, useUpdateOrganization } from "@/features/admin/queries";
 import { useCategories } from "@/features/documents/queries";
+import { GroupsCard } from "@/features/insights/groups-card";
 import { errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { DocumentVisibility, OrganizationRead } from "@/types";
@@ -195,6 +196,7 @@ export default function SettingsPage() {
       <PageBody className="max-w-4xl">
         {can("organization:manage") && <OrganizationCard />}
         <CategoriesCard editable={can("categories:manage")} />
+        {can("groups:manage") && <GroupsCard />}
         <PasswordCard />
       </PageBody>
     </>

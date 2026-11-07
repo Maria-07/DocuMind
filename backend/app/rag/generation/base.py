@@ -73,3 +73,13 @@ class LLMProvider(Protocol):
     ) -> AsyncIterator[GenerationEvent]: ...
 
     async def condense_question(self, *, question: str, history: list[ChatTurn]) -> str: ...
+
+    async def complete_json(
+        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+    ) -> dict[str, Any]:
+        """One non-streaming call whose output is constrained to ``schema`` (structured outputs).
+
+        Schemas must be strict-compatible: every property listed in ``required``,
+        ``additionalProperties: false``, optional values expressed as ``["type", "null"]``.
+        """
+        ...

@@ -11,6 +11,7 @@ sentence as with Claude).
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from html import escape
 from typing import Any
@@ -152,6 +153,29 @@ class OpenAILLM:
             stop_reason=stop_reason,
             usage=_usage(getattr(final, "usage", None)),
         )
+
+    async def complete_json(
+        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+    ) -> dict[str, Any]:
+        try:
+            response = await self.client.responses.create(
+                model=self.settings.llm_model,
+                instructions=system,
+                input=prompt,
+                max_output_tokens=max_tokens,  # includes reasoning tokens
+                reasoning={"effort": self.settings.llm_effort},
+                text={"format": {"type": "json_schema", "name": name, "schema": schema, "strict": True}},
+                store=False,
+            )
+        except openai.APIError as exc:
+            log.warning("llm_json_failed", task=name, error=type(exc).__name__)
+            raise _to_generation_error(exc) from exc
+        if getattr(response, "status", "completed") == "incomplete":
+            raise GenerationError("llm_truncated", "The language model response was cut off")
+        try:
+            return json.loads(response.output_text or "")  # type: ignore[no-any-return]
+        except json.JSONDecodeError as exc:
+            raise GenerationError("llm_invalid_output", "The language model returned invalid JSON") from exc
 
     async def condense_question(self, *, question: str, history: list[ChatTurn]) -> str:
         transcript = "\n".join(f"{t.role.upper()}: {t.content[:2000]}" for t in history[-6:])

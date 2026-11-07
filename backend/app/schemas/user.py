@@ -20,6 +20,14 @@ class UserRead(ORMModel):
     created_at: datetime
 
 
+class MemberRead(ORMModel):
+    """Directory entry visible to every member (for share dialogs) — no role or login data."""
+
+    id: uuid.UUID
+    full_name: str
+    email: str
+
+
 class UserCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

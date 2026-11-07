@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     chat_history_turns: int = Field(default=6, ge=0, le=50)
     rate_limit_chat_per_minute: int = 20
     rate_limit_search_per_minute: int = 60
+    # Evaluations: judge with a different (ideally stronger) model of the same provider to reduce
+    # self-preference bias. Unset = the answer model judges itself.
+    eval_judge_model: str | None = None
 
     # --- Rate limiting (per minute) --------------------------------------------------------
     rate_limit_enabled: bool = True

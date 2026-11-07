@@ -5,16 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
-from arq import cron
+from arq import cron, func
 from arq.connections import RedisSettings
 from qdrant_client import AsyncQdrantClient
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import create_engine, create_sessionmaker
+from app.rag.evaluation.runner import EvaluationRunner
+from app.rag.generation import build_judge
+from app.rag.runtime import build_rag_runtime
 from app.rag.setup import build_ingestion_pipeline
 from app.services.storage import LocalStorage
-from app.workers.tasks import ingest_document, purge_document, sweep_jobs, sync_document_payload
+from app.workers.tasks import ingest_document, purge_document, run_evaluation, sweep_jobs, sync_document_payload
 
 _settings = get_settings()
 log = structlog.get_logger(__name__)
@@ -33,6 +36,15 @@ async def startup(ctx: dict[str, Any]) -> None:
     # Loads the embedding models (downloaded on first run) and ensures the Qdrant collection exists.
     pipeline = await build_ingestion_pipeline(
         settings=_settings, sessionmaker=sessionmaker, storage=storage, qdrant=qdrant
+    )
+    # Evaluations reuse the loaded embedding models; the reranker/LLM load lazily on first use.
+    rag = build_rag_runtime(_settings, sessionmaker, qdrant, embedder=pipeline.embedder, sparse=pipeline.sparse)
+    ctx["evaluation_runner"] = EvaluationRunner(
+        sessionmaker=sessionmaker,
+        settings=_settings,
+        retriever=rag.retriever,
+        llm=rag.llm,
+        judge=build_judge(_settings) or rag.llm,
     )
     ctx.update(
         settings=_settings,
@@ -53,7 +65,13 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [ingest_document, sync_document_payload, purge_document]
+    # Evaluation runs call the LLM per case and can take much longer than an ingestion job.
+    functions = [
+        ingest_document,
+        sync_document_payload,
+        purge_document,
+        func(run_evaluation, timeout=3600, max_tries=1),
+    ]
     cron_jobs = [cron(sweep_jobs, minute=set(range(0, 60, 5)), run_at_startup=False)]
     on_startup = startup
     on_shutdown = shutdown

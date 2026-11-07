@@ -32,8 +32,12 @@ test("register, upload, index, ask, cite, navigate", async ({ page }) => {
   // --- Upload two real documents via the dialog ------------------------------------------
   await nav(page, "Documents");
   await expect(page.getByText("No documents yet")).toBeVisible();
-  await page.getByRole("button", { name: "Upload documents" }).first().click();
   const dialog = page.getByRole("dialog");
+  // Retry the click: right after navigation the button can render before React has hydrated it.
+  await expect(async () => {
+    await page.getByRole("button", { name: "Upload documents" }).first().click();
+    await expect(dialog).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
   await dialog.locator('input[type="file"]').setInputFiles([
     path.join(FIXTURES, "Security Policy.docx"),
     path.join(FIXTURES, "Revenue 2026.xlsx"),
@@ -102,6 +106,92 @@ test("register, upload, index, ask, cite, navigate", async ({ page }) => {
   await expect(page).toHaveURL(/\/login\?next=%2Fdocuments/);
 });
 
+async function login(page: Page, email: string) {
+  await page.goto("/login");
+  await page.getByLabel("Work e-mail").fill(email);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: /Welcome back/ })).toBeVisible();
+}
+
+async function choose(page: Page, combobox: string, option: string | RegExp) {
+  await page.getByRole("combobox", { name: combobox }).click();
+  await page.getByRole("option", { name: option }).click();
+}
+
+test("insights: analytics, embeddings, compare, evaluation, sharing", async ({ page }) => {
+  test.setTimeout(600_000);
+  await login(page, admin.email);
+
+  // --- Analytics: real counts from the first test ---------------------------------------
+  await nav(page, "Analytics");
+  await expect(page.getByRole("heading", { name: "Analytics" })).toBeVisible();
+  await expect(page.getByText("2 indexed")).toBeVisible();
+  await expect(page.getByText("Document activity", { exact: true })).toBeVisible();
+  await shot(page, "13-analytics");
+
+  // --- Embeddings: both documents on the active index ------------------------------------
+  await nav(page, "Embeddings");
+  await expect(page.getByText("2 / 2")).toBeVisible();
+  await expect(page.getByRole("table").getByText("Active", { exact: true })).toBeVisible();
+  await shot(page, "14-embeddings");
+
+  // --- Compare two documents (real LLM) --------------------------------------------------
+  await nav(page, "Compare");
+  await choose(page, "Add document", "Security Policy");
+  await choose(page, "Add document", "Revenue 2026");
+  await page.getByLabel("Focus question").fill("What does each document cover?");
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  const table = page.getByRole("table");
+  await expect(table.getByRole("columnheader", { name: "Aspect" })).toBeVisible({ timeout: 180_000 });
+  await expect(table.getByRole("columnheader", { name: /Security Policy/ })).toBeVisible();
+  await shot(page, "15-compare");
+
+  // --- Groups: create one with Uma ---------------------------------------------------------
+  await nav(page, "Settings");
+  await page.getByLabel("New group name").fill("Finance");
+  await page.getByRole("button", { name: "Add" }).last().click();
+  await page.getByRole("button", { name: "Members" }).click();
+  await page.getByRole("dialog").getByText("Uma User").click();
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("1 member", { exact: true })).toBeVisible();
+
+  // --- Share a document with the group ---------------------------------------------------
+  await nav(page, "Documents");
+  await page.getByRole("link", { name: /Revenue 2026/ }).first().click();
+  await page.getByRole("button", { name: "Share" }).click();
+  await choose(page, "Add person or group", "Finance (group)");
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Sharing updated")).toBeVisible();
+  await page.getByRole("button", { name: "Share" }).click();
+  await expect(page.getByRole("dialog").getByText("Finance", { exact: true })).toBeVisible();
+  await shot(page, "16-share-dialog");
+  await page.keyboard.press("Escape");
+
+  // --- Evaluation: dataset, case with evidence, run on the worker, results ----------------
+  await nav(page, "Evaluations");
+  await page.getByLabel("Name").fill("Policy QA");
+  await page.getByRole("button", { name: "Create dataset" }).click();
+  await page.getByRole("link", { name: /Policy QA/ }).click();
+  await page.getByLabel("Question").fill("What is the minimum password length?");
+  await page.getByLabel("Reference answer (optional)").fill("At least 14 characters.");
+  await choose(page, "Add relevant document", "Security Policy");
+  await page.getByLabel("Evidence quote").fill("Passwords must be at least 14 characters");
+  await page.getByRole("button", { name: "Add case" }).click();
+  await expect(page.getByText("Test cases (1)")).toBeVisible();
+  await page.getByRole("button", { name: "Run evaluation" }).click();
+  await expect(page.getByRole("table").getByText("Complete")).toBeVisible({ timeout: 300_000 });
+  // The trend refreshes when the polled run completes.
+  await expect(page.getByText("Run the dataset to start a trend.")).toHaveCount(0);
+  await shot(page, "17-evaluation-dataset");
+  await page.getByRole("table").getByRole("link").first().click();
+  await expect(page.getByText("Per-case results")).toBeVisible();
+  await expect(page.getByText("Precision@5")).toBeVisible();
+  await page.getByRole("row", { name: /minimum password length/ }).click();
+  await expect(page.getByText("Judge rationale")).toBeVisible();
+  await shot(page, "18-evaluation-run");
+});
+
 test("a regular user sees only what their role allows", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Work e-mail").fill(`uma-${unique}@example.com`);
@@ -110,6 +200,10 @@ test("a regular user sees only what their role allows", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Welcome back, Uma" })).toBeVisible();
 
   await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "User Management" })).toHaveCount(0);
+  for (const hidden of ["Analytics", "Embeddings", "Evaluations"]) {
+    await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: hidden })).toHaveCount(0);
+  }
+  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Compare" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Upload documents" })).toHaveCount(0);
   await page.goto("/users");
   await expect(page.getByText("Administrators only")).toBeVisible();

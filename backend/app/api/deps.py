@@ -136,18 +136,18 @@ def get_document_service(session: DbSession, resources: Resources) -> DocumentSe
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 
-def _rag(resources: AppResources) -> RagRuntime:
+def require_rag(resources: AppResources) -> RagRuntime:
     if resources.rag is None:
         raise ServiceUnavailableError("Retrieval is not available", code="retrieval_unavailable")
     return resources.rag
 
 
 def get_chat_service(resources: Resources) -> ChatService:
-    return ChatService(resources.sessionmaker, resources.settings, _rag(resources))
+    return ChatService(resources.sessionmaker, resources.settings, require_rag(resources))
 
 
 def get_search_service(resources: Resources) -> SearchService:
-    return SearchService(resources.sessionmaker, _rag(resources).retriever)
+    return SearchService(resources.sessionmaker, require_rag(resources).retriever)
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]

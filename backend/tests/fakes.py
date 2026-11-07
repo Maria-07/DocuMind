@@ -111,6 +111,8 @@ class ScriptedLLM:
         self.condense_calls: list[str] = []
         self.script: Callable[[list[SourceDocument]], list[GenerationEvent]] | None = None
         self.fail_with: GenerationError | None = None
+        self.json_calls: list[dict[str, Any]] = []
+        self.json_responses: dict[str, Any] = {}
 
     @property
     def model_id(self) -> str:
@@ -144,3 +146,23 @@ class ScriptedLLM:
         self.condense_calls.append(question)
         last_user = next((t.content for t in reversed(history) if t.role == "user"), "")
         return f"{question} (context: {last_user})"
+
+    async def complete_json(
+        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+    ) -> dict[str, Any]:
+        self.json_calls.append({"name": name, "prompt": prompt})
+        if name in self.json_responses:
+            response = self.json_responses[name]
+            return response(prompt) if callable(response) else response
+        if name == "answer_judgement":
+            return {
+                "claims": 2,
+                "supported_claims": 2,
+                "unsupported_claims": [],
+                "answer_relevance": 5,
+                "context_relevance": 0.5,
+                "correctness": 4,
+                "abstained": False,
+                "rationale": "scripted",
+            }
+        raise GenerationError("llm_error", f"no scripted response for {name}")

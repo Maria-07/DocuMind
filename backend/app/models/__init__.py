@@ -4,6 +4,7 @@ from app.models.audit import AuditLog
 from app.models.chat import Conversation, Message, MessageCitation, RetrievalLog
 from app.models.chunk import DocumentChunk, EmbeddingConfig
 from app.models.document import Category, Document, DocumentPermission, IngestionJob
+from app.models.evaluation import DocumentComparison, EvalCase, EvalCaseResult, EvalDataset, EvalRun
 from app.models.organization import Organization
 from app.models.user import GroupMember, RefreshToken, User, UserGroup
 
@@ -13,8 +14,13 @@ __all__ = [
     "Conversation",
     "Document",
     "DocumentChunk",
+    "DocumentComparison",
     "DocumentPermission",
     "EmbeddingConfig",
+    "EvalCase",
+    "EvalCaseResult",
+    "EvalDataset",
+    "EvalRun",
     "GroupMember",
     "IngestionJob",
     "Message",

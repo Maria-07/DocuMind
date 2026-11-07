@@ -26,3 +26,4 @@ class ArqJobQueue:
 INGEST_DOCUMENT = "ingest_document"
 PURGE_DOCUMENT = "purge_document"
 SYNC_DOCUMENT_PAYLOAD = "sync_document_payload"
+RUN_EVALUATION = "run_evaluation"

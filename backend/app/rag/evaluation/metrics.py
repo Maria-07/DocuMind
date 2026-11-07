@@ -4,22 +4,23 @@ from __future__ import annotations
 
 import math
 from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 
 
-def precision_at_k(retrieved: Sequence[Hashable], relevant: set[Hashable], k: int) -> float:
+def precision_at_k(retrieved: Sequence[Hashable], relevant: AbstractSet[Hashable], k: int) -> float:
     if k <= 0:
         raise ValueError("k must be positive")
     top = retrieved[:k]
     return sum(1 for r in top if r in relevant) / k
 
 
-def recall_at_k(retrieved: Sequence[Hashable], relevant: set[Hashable], k: int) -> float:
+def recall_at_k(retrieved: Sequence[Hashable], relevant: AbstractSet[Hashable], k: int) -> float:
     if not relevant:
         return 1.0  # nothing to find (e.g. an unanswerable question)
     return len(set(retrieved[:k]) & relevant) / len(relevant)
 
 
-def reciprocal_rank(retrieved: Sequence[Hashable], relevant: set[Hashable]) -> float:
+def reciprocal_rank(retrieved: Sequence[Hashable], relevant: AbstractSet[Hashable]) -> float:
     for rank, item in enumerate(retrieved, start=1):
         if item in relevant:
             return 1.0 / rank
@@ -28,7 +29,7 @@ def reciprocal_rank(retrieved: Sequence[Hashable], relevant: set[Hashable]) -> f
 
 def ndcg_at_k(
     retrieved: Sequence[Hashable],
-    relevant: set[Hashable] | Mapping[Hashable, float],
+    relevant: AbstractSet[Hashable] | Mapping[Hashable, float],
     k: int,
 ) -> float:
     """NDCG with graded relevance (mapping item → gain) or binary relevance (set)."""

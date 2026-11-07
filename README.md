@@ -15,7 +15,7 @@ built-in RAG evaluation framework.
 | 3 | Ingestion pipeline: PDF/DOCX/XLSX/XLS parsing, structure- and token-aware chunking, local dense + BM25 embeddings, Qdrant indexing with ACL payloads, background worker with retries | ✅ done |
 | 4 | RAG: permission-aware hybrid retrieval, cross-encoder reranking, grounded streaming answers with validated citations, conversations, search API, retrieval-accuracy benchmark; Anthropic or OpenAI (e.g. gpt-5-nano) | ✅ done |
 | 5 | Frontend: Next.js 16 dashboard — auth, documents (drag & drop upload, live status, extracted content, PDF preview), streaming AI chat with clickable citations, user management, settings; responsive; Playwright e2e | ✅ done |
-| 6 | Comparison, conversations, analytics, evaluation | — |
+| 6 | Grounded document comparison, RAG evaluation module (datasets, LLM judge, regression gating, trends), organization analytics, embedding/re-index management, document sharing & groups UI | ✅ done |
 | 7 | Hardening, deployment | — |
 
 **What works today:** registration/login/refresh/logout, role- and grant-based document access,
@@ -23,6 +23,10 @@ uploads with content validation and de-duplication, listing/search/filter, downl
 delete with purge, audit logging — and **ingestion**: every upload is parsed, chunked, embedded and
 indexed in Qdrant by the worker (`uploaded → processing → indexed | failed`). Extracted content with
 page / section / sheet + row locations is available at `GET /documents/{id}/chunks`.
+
+**Phase 6 adds** side-by-side comparison of 2–5 documents, a RAG evaluation module with
+regression gating, an analytics dashboard, embedding-config management with re-indexing, and
+sharing dialogs (users/groups, view/manage) — see *Comparison, evaluation & analytics* below.
 
 ### Ingestion at a glance
 
@@ -58,6 +62,24 @@ questions over 4 documents / 35 chunks with near-miss distractors, real models):
 Rerankers compared on the same set: MiniLM-L-12 MRR 0.92, jina-turbo 0.62, bge-reranker-base 0.96.
 The set is small (each question ≈ 0.08 Recall@1): it guards against regressions, the Phase 6
 evaluation module measures quality on real document sets.
+
+### Comparison, evaluation & analytics at a glance
+
+| Feature | Implementation |
+|---|---|
+| Compare | Each document contributes its own sources (chunks relevant to the optional focus question, else its opening content), so a large document cannot crowd out the others. One structured-output call (JSON schema) returns aspects × documents with `present / absent / unclear`, a difference summary and a conflict flag. Server-side validation keeps only citations of the finding's own document; a "present" finding without valid evidence is downgraded to "unclear". Access is checked per document |
+| Evaluate | Datasets of test cases (question, optional reference answer, relevant documents, **evidence quotes** that are resolved to the chunks of the config under test, so labels survive re-chunking). A run executes every case through the **real** retrieval + answer path on the worker, as the user who started it |
+| Metrics | Retrieval: Precision@5, Recall@5, MRR, NDCG@5, document recall. Answer (LLM judge, versioned rubric `judge-v1`, structured output, rationale stored): faithfulness, hallucination rate, answer relevance, context relevance, correctness vs. reference. Deterministic: citation accuracy, abstention accuracy (says "not found" exactly when it should), latency |
+| Regressions | Each run records its full configuration (models, chunking, thresholds, prompt and judge versions) and is compared with the previous completed run; the UI flags drops > 5 pts and `python -m app.cli evaluate` exits non-zero for CI |
+| Analytics | Admin dashboard from real data: document counts, uploads vs. indexed per day, failures, questions per day, "not found" rate, retrieval latency by stage (p50/p95), grounded-answer rate, tokens |
+| Embeddings | Configurations with document / chunk / vector counts; re-index stale, failed or all documents (old index keeps serving until each new version is complete) |
+
+```bash
+# Evaluate a dataset from the CLI (e.g. in CI after changing models, chunking or prompts)
+python -m app.cli evaluate --dataset <uuid> --fail-under retrieval.ndcg@5=0.7     --fail-under answer.faithfulness=0.9 --max-drop 0.05      # exit 1 on regression
+```
+
+The judge uses `LLM_MODEL` unless `EVAL_JUDGE_MODEL` names another model of the same provider.
 
 **Chat API:** `POST /chat/conversations` → `POST /chat/conversations/{id}/messages` with
 `Accept: text/event-stream` streams `meta`, `status`, `sources`, `token`, `citation`, `done`
@@ -182,7 +204,13 @@ Interactive docs: `/docs`. All endpoints except register/login/refresh/logout re
 | Users (admin) | `GET/POST /users` `GET/PATCH/DELETE /users/{id}` |
 | Groups | `GET /groups` `POST /groups` `GET/PATCH/DELETE /groups/{id}` `PUT /groups/{id}/members` |
 | Categories | `GET/POST /categories` `PATCH/DELETE /categories/{id}` |
+| Organization members | `GET /organization/members` (any member; id, name, e-mail — for share dialogs) |
 | Documents | `POST /documents/upload` `GET /documents` `GET/PATCH/DELETE /documents/{id}` `POST /documents/{id}/reprocess` `GET /documents/{id}/jobs` `GET /documents/{id}/download` `GET /documents/{id}/preview` `GET/PUT /documents/{id}/permissions` |
+| Chat & search | `GET/POST /chat/conversations` `GET/PATCH/DELETE /chat/conversations/{id}` `POST /chat/conversations/{id}/messages` (SSE) `POST /search/hybrid` `/search/semantic` `/search/documents` |
+| Comparisons | `POST /comparisons` `GET /comparisons` `GET /comparisons/{id}` |
+| Evaluations | `GET/POST /evaluations/datasets` `DELETE /evaluations/datasets/{id}` `GET/POST /evaluations/datasets/{id}/cases` `DELETE …/cases/{case_id}` `POST /evaluations/run` `GET /evaluations/results` `GET /evaluations/results/{id}` `GET /evaluations/metrics` (view: managers & admins; run: admins) |
+| Analytics (admin) | `GET /analytics/overview` `GET /analytics/documents?days=` `GET /analytics/retrieval?days=` |
+| Embeddings (admin) | `GET /embeddings` `POST /embeddings/reindex` (`stale` / `failed` / `all`) |
 
 ## Security model (summary)
 

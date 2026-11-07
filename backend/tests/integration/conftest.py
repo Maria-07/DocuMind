@@ -188,6 +188,7 @@ async def pipeline(resources: AppResources, qdrant: Any, embedder: Any) -> Async
         token_counter=WordCounter(),
     )
     resources.vector_store = p.store  # the API hides vectors of deleted documents through it
+    resources.qdrant = qdrant  # e.g. /embeddings point counts, /ready
     yield p
     try:
         await qdrant.update_collection_aliases(

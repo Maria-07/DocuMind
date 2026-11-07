@@ -24,6 +24,7 @@ import {
   useReprocessDocument,
   useUpdateDocument,
 } from "@/features/documents/queries";
+import { ShareDialog } from "@/features/insights/share-dialog";
 import { downloadFile, errorMessage, fetchBlob } from "@/lib/api";
 import { formatBytes, formatDate, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -325,6 +326,7 @@ function DocumentView() {
                 <SelectItem value="private">Private (me and admins)</SelectItem>
               </SelectContent>
             </Select>
+            <ShareDialog documentId={doc.id} visibility={doc.visibility} />
           </div>
         )}
 

@@ -290,6 +290,8 @@ User selects 2–N documents (each must pass `can_view`). The aspects to compare
 ```
 Rendered as a comparison table (aspect rows × document columns) with citations per cell.
 
+> **As implemented (Phase 6).** Sources are numbered across documents and the model refers to documents by label (D1…); the server maps labels back to documents, rejects citations of another document's sources, downgrades unevidenced "present" findings to "unclear", fills findings the model omitted, and replaces labels with titles in user-facing text. The structured output uses the provider's strict JSON-schema mode (`complete_json`) for both Anthropic and OpenAI. Comparisons are stored (`document_comparisons`) and listed per user.
+
 ---
 
 ## 4. PostgreSQL schema
@@ -602,6 +604,8 @@ Docker Compose services: `frontend`, `backend`, `worker`, `postgres`, `qdrant`, 
 - Ops: latency per stage, tokens, cost per case.
 
 **Runner.** arq job iterates cases with bounded concurrency, uses the **same retrieval/generation code path** as chat (with a synthetic principal scoped to the dataset's documents), stores per-case results and aggregates, and compares to a baseline run. A CLI (`python -m app.rag.evaluation.run --dataset … --fail-under ndcg=0.70 --max-drop 0.03`) enables CI regression gating when embedding model, chunking, retrieval config, prompts or LLM change. The dashboard shows metric trends per config and per-case diffs (regressions highlighted).
+
+> **As implemented (Phase 6).** Cases are evaluated sequentially as the user who started the run (so permissions apply exactly as in chat). The CLI is `python -m app.cli evaluate --dataset … [--baseline …] [--fail-under metric=value] [--max-drop 0.05]`. The baseline defaults to the dataset's previous completed run; `hallucination_rate` and latency are lower-is-better, latency is reported but never gated. Citation accuracy is measured deterministically (cited chunk ∈ relevant chunks, or relevant documents when no evidence quote is given); the judge returns faithfulness/hallucination, answer and context relevance, correctness and abstention with a stored rationale (`judge-v1`). The UI covers datasets, cases (form or JSON import), runs with per-case answers/citations/rationale, baseline deltas and a metric trend.
 
 ---
 

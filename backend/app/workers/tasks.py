@@ -128,3 +128,12 @@ async def sweep_jobs(ctx: dict[str, Any]) -> dict[str, int]:
     if requeued or recovered:
         log.info("jobs_swept", requeued=requeued, recovered_running=recovered)
     return {"requeued": requeued, "recovered_running": recovered}
+
+
+async def run_evaluation(ctx: dict[str, Any], run_id: str) -> str:
+    """Run an evaluation dataset through retrieval + generation and score it (see rag.evaluation.runner)."""
+    from app.rag.evaluation.runner import EvaluationRunner
+
+    runner: EvaluationRunner = ctx["evaluation_runner"]
+    run = await runner.run(uuid.UUID(run_id))
+    return run.status

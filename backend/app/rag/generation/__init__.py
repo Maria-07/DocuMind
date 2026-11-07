@@ -15,3 +15,10 @@ def build_llm(settings: Settings) -> LLMProvider | None:
     from app.rag.generation.anthropic_llm import AnthropicLLM
 
     return AnthropicLLM(settings)
+
+
+def build_judge(settings: Settings) -> LLMProvider | None:
+    """Optional separate judge model for evaluations (EVAL_JUDGE_MODEL); None = use the answer model."""
+    if not settings.eval_judge_model:
+        return None
+    return build_llm(settings.model_copy(update={"llm_model": settings.eval_judge_model}))

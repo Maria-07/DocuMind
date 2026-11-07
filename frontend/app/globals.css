@@ -51,6 +51,13 @@
 }
 
 :root {
+  /* Data-viz series (validated with dataviz validate_palette.js: light on #ffffff, dark on #111826) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --status-critical: #d03b3b;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #898781;
   /* DocuMind: light-gray canvas, white cards, blue primary, dark navy sidebar */
   --background: oklch(0.975 0.004 250);
   --foreground: oklch(0.21 0.03 262);
@@ -89,6 +96,12 @@
 }
 
 .dark {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --status-critical: #d03b3b;
+  --viz-grid: #2c2c2a;
+  --viz-axis: #898781;
   --background: oklch(0.17 0.025 264);
   --foreground: oklch(0.95 0.01 260);
   --card: oklch(0.21 0.03 264);

@@ -8,6 +8,7 @@ text that was not retrieved.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -148,6 +149,31 @@ class AnthropicLLM:
             details = getattr(final, "stop_details", None)
             log.info("llm_refusal", category=getattr(details, "category", None))
         yield GenerationDone(model=final.model, stop_reason=final.stop_reason, usage=_usage(final.usage))
+
+    async def complete_json(
+        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+    ) -> dict[str, Any]:
+        effort = "low" if self.settings.llm_effort in ("none", "minimal") else self.settings.llm_effort
+        try:
+            response = await self.client.messages.create(
+                model=self.settings.llm_model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+                output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+            )
+        except anthropic.APIError as exc:
+            log.warning("llm_json_failed", task=name, error=type(exc).__name__)
+            raise _to_generation_error(exc) from exc
+        if response.stop_reason == "refusal":
+            raise GenerationError("llm_refused", "The language model declined this request")
+        if response.stop_reason == "max_tokens":
+            raise GenerationError("llm_truncated", "The language model response was cut off")
+        text = "".join(b.text for b in response.content if b.type == "text")
+        try:
+            return json.loads(text)  # type: ignore[no-any-return]
+        except json.JSONDecodeError as exc:
+            raise GenerationError("llm_invalid_output", "The language model returned invalid JSON") from exc
 
     async def condense_question(self, *, question: str, history: list[ChatTurn]) -> str:
         """Rewrite a follow-up ("what about the second one?") into a standalone search query."""

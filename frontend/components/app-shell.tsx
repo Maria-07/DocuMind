@@ -8,6 +8,7 @@ import {
   BrainCircuit,
   FileText,
   FlaskConical,
+  GitCompare,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -48,10 +49,11 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: "/", label: "Home", icon: LayoutDashboard },
   { href: "/documents", label: "Documents", icon: FileText },
-  { href: "/embeddings", label: "Embeddings", icon: BrainCircuit, soon: true },
+  { href: "/embeddings", label: "Embeddings", icon: BrainCircuit, permission: "organization:manage" },
   { href: "/chat", label: "AI Chat", icon: MessageSquare },
-  { href: "/evaluations", label: "Evaluations", icon: FlaskConical, soon: true },
-  { href: "/analytics", label: "Analytics", icon: BarChart3, soon: true },
+  { href: "/compare", label: "Compare", icon: GitCompare },
+  { href: "/evaluations", label: "Evaluations", icon: FlaskConical, permission: "evaluations:view" },
+  { href: "/analytics", label: "Analytics", icon: BarChart3, permission: "analytics:organization" },
   { href: "/users", label: "User Management", icon: Users, permission: "users:manage" },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

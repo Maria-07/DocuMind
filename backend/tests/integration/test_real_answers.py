@@ -160,3 +160,82 @@ async def test_real_follow_up_question(client: httpx.AsyncClient, stack: RealSta
     print("\nFOLLOW-UP ANSWER:", answer)
     assert "multi-factor" in answer.lower() or "mfa" in answer.lower()
     assert dict(events)["done"]["grounded"]
+
+
+async def test_real_comparison_and_evaluation(
+    client: httpx.AsyncClient, stack: RealStack, resources: AppResources
+) -> None:
+    from app.rag.evaluation.runner import EvaluationRunner
+
+    admin = await _setup(client, stack, resources)
+    newer = await upload_one(
+        admin,
+        "Security Policy 2027.pdf",
+        build_pdf(
+            [
+                "Passwords must be at least 16 characters and rotated every 60 days. "
+                "Multi-factor authentication is mandatory for all access. "
+                "Customer records are retained for ten years."
+            ],
+            title="Security Policy 2027",
+        ),
+    )
+    assert await run_ingestion(stack.pipeline, resources, newer["id"]) == "indexed"
+    docs = (await client.get("/api/v1/documents?q=Security", headers=admin.headers)).json()["items"]
+    ids = [d["id"] for d in sorted(docs, key=lambda d: d["title"])]
+
+    resp = await client.post(
+        "/api/v1/comparisons",
+        headers=admin.headers,
+        json={"document_ids": ids, "question": "How do the password and retention rules differ?"},
+    )
+    assert resp.status_code == 201, resp.text
+    comparison = resp.json()
+    assert comparison["status"] == "complete", comparison["error"]
+    result = comparison["result"]
+    print("\nCOMPARISON:", result["summary"])
+    for a in result["aspects"]:
+        print(
+            " -",
+            a["aspect"],
+            "| conflict:",
+            a["conflict"],
+            "|",
+            [(f["status"], f["finding"][:60], len(f["citations"])) for f in a["findings"]],
+        )
+    assert result["aspects"] and any(a["conflict"] for a in result["aspects"])
+    cited = [c for a in result["aspects"] for f in a["findings"] for c in f["citations"]]
+    assert cited and all(c["document_id"] in ids for c in cited)
+
+    ds = (await client.post("/api/v1/evaluations/datasets", headers=admin.headers, json={"name": "Real"})).json()
+    policy = next(d for d in docs if d["title"] == "Security Policy")
+    await client.post(
+        f"/api/v1/evaluations/datasets/{ds['id']}/cases",
+        headers=admin.headers,
+        json=[
+            {
+                "question": "How long must passwords be in the original security policy?",
+                "expected_answer": "14 characters",
+                "relevant_document_ids": [policy["id"]],
+                "evidence": [{"document_id": policy["id"], "quote": "14 characters"}],
+            },
+            {"question": "What is the cafeteria menu on Fridays?", "relevant_document_ids": []},
+        ],
+    )
+    run = (await client.post("/api/v1/evaluations/run", headers=admin.headers, json={"dataset_id": ds["id"]})).json()
+    runner = EvaluationRunner(
+        sessionmaker=resources.sessionmaker,
+        settings=resources.settings,
+        retriever=resources.rag.retriever,
+        llm=resources.rag.llm,
+    )  # type: ignore[union-attr]
+    finished = await runner.run(uuid.UUID(run["id"]))
+    assert finished.status == "complete", finished.error
+    detail = (await client.get(f"/api/v1/evaluations/results/{run['id']}", headers=admin.headers)).json()
+    print("EVAL METRICS:", {k: round(v, 3) if isinstance(v, float) else v for k, v in detail["metrics"].items()})
+    for r in detail["results"]:
+        print(" -", r["question"][:50], "| error:", r["error"], "| judge:", r["judge"].get("rationale", "")[:120])
+    assert all(r["error"] is None for r in detail["results"])
+    m = detail["metrics"]
+    assert m["retrieval.recall@5"] == 1.0 and m["answer.abstention_accuracy"] == 1.0
+    assert m["answer.faithfulness"] >= 0.5
