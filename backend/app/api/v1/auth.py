@@ -13,7 +13,11 @@ from app.services.auth import AuthService, IssuedTokens
 
 router = APIRouter(prefix="/auth", tags=["auth"], responses=ERROR_RESPONSES)
 
+# Strict budget for credential guessing (login / register).
 _auth_rate_limit = [Depends(rate_limit_by_ip("auth", "rate_limit_auth_per_minute"))]
+# Refresh runs on every page load and token expiry and is protected by an unguessable, rotating
+# httpOnly cookie, so it has its own, larger budget (sharing the login budget logged users out).
+_refresh_rate_limit = [Depends(rate_limit_by_ip("refresh", "rate_limit_refresh_per_minute"))]
 
 
 def _cookie_path(settings: Settings) -> str:
@@ -78,7 +82,7 @@ async def login(
 @router.post(
     "/refresh",
     response_model=TokenResponse,
-    dependencies=_auth_rate_limit,
+    dependencies=_refresh_rate_limit,
     summary="Rotate the refresh-token cookie and issue a new access token",
 )
 async def refresh(

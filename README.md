@@ -13,8 +13,8 @@ built-in RAG evaluation framework.
 | 1 | Architecture & design | ✅ done |
 | 2 | Backend foundation: FastAPI, PostgreSQL + migrations, auth (JWT + rotating refresh tokens), RBAC, organizations/users/groups/categories, document upload & management APIs, audit log, rate limiting | ✅ done |
 | 3 | Ingestion pipeline: PDF/DOCX/XLSX/XLS parsing, structure- and token-aware chunking, local dense + BM25 embeddings, Qdrant indexing with ACL payloads, background worker with retries | ✅ done |
-| 4 | RAG: permission-aware hybrid retrieval, cross-encoder reranking, grounded streaming answers with validated citations, conversations, search API, retrieval-accuracy benchmark | ✅ done (real-LLM test pending an API key) |
-| 5 | Frontend (Next.js) | — |
+| 4 | RAG: permission-aware hybrid retrieval, cross-encoder reranking, grounded streaming answers with validated citations, conversations, search API, retrieval-accuracy benchmark; Anthropic or OpenAI (e.g. gpt-5-nano) | ✅ done |
+| 5 | Frontend: Next.js 16 dashboard — auth, documents (drag & drop upload, live status, extracted content, PDF preview), streaming AI chat with clickable citations, user management, settings; responsive; Playwright e2e | ✅ done |
 | 6 | Comparison, conversations, analytics, evaluation | — |
 | 7 | Hardening, deployment | — |
 
@@ -136,6 +136,17 @@ python -m app.cli reindex --all       # everything (e.g. after a parser improvem
 ```
 
 Health: `GET /health` (liveness), `GET /ready` (PostgreSQL, Redis, Qdrant reachability).
+
+```bash
+# 3. Frontend (Node 20.9+; `nvm use` picks 22 from frontend/.nvmrc)
+cd frontend
+npm install
+npm run dev                                              # http://localhost:3000
+```
+
+The frontend proxies `/api/*` to the API (`API_URL`, default `http://127.0.0.1:8010`), so open the
+app at http://localhost:3000, create a workspace, upload documents and ask questions. See
+[frontend/README.md](frontend/README.md) for scripts, structure and the Playwright e2e tests.
 
 ## Tests
 

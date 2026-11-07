@@ -120,7 +120,8 @@ class Settings(BaseSettings):
 
     # --- Rate limiting (per minute) --------------------------------------------------------
     rate_limit_enabled: bool = True
-    rate_limit_auth_per_minute: int = 10
+    rate_limit_auth_per_minute: int = 10  # login / register (brute-force protection)
+    rate_limit_refresh_per_minute: int = 60  # token refresh (page loads, token expiry)
     rate_limit_upload_per_minute: int = 20
     rate_limit_default_per_minute: int = 300
 
