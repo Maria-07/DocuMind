@@ -6,7 +6,7 @@ Upload, manage, search and chat with your organization's documents (PDF, DOCX, X
 Retrieval-Augmented Generation with source citations, strict per-document permissions, and a
 built-in RAG evaluation framework.
 
-> Architecture & design: [docs/architecture.md](docs/architecture.md) · Deployment & operations: [docs/deployment.md](docs/deployment.md)
+> User manual: [docs/user-manual.md](docs/user-manual.md) · Architecture & design: [docs/architecture.md](docs/architecture.md) · Deployment & operations: [docs/deployment.md](docs/deployment.md)
 
 ## Status
 
