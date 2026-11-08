@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -141,7 +142,7 @@ class DocumentService:
             used=await self.docs.storage_used_bytes(org.id) if org.storage_quota_bytes else 0,
         )
 
-        results: list[UploadResult] = []
+        results: builtins.list[UploadResult] = []
         for source in files:
             results.append(await self._upload_one(principal, source, effective_visibility, category_id, quota, meta))
         return UploadResponse(
@@ -312,7 +313,7 @@ class DocumentService:
     # =======================================================================================
     async def list(
         self, principal: Principal, filters: DocumentListFilters, page: PageParams
-    ) -> tuple[list[DocumentRead], int]:
+    ) -> tuple[builtins.list[DocumentRead], int]:
         documents, total = await self.docs.list_visible(principal, filters, offset=page.offset, limit=page.page_size)
         grants = await self.docs.grants_for_many([d.id for d in documents])
         items = [
@@ -333,7 +334,7 @@ class DocumentService:
             }
         )
 
-    async def list_jobs(self, principal: Principal, document_id: uuid.UUID) -> list[IngestionJobRead]:
+    async def list_jobs(self, principal: Principal, document_id: uuid.UUID) -> builtins.list[IngestionJobRead]:
         document, _ = await self._get_visible(principal, document_id)
         return [IngestionJobRead.model_validate(j) for j in await self.docs.list_jobs(document.id)]
 
@@ -479,12 +480,12 @@ class DocumentService:
     # --- permissions -----------------------------------------------------------------------
     async def get_permissions(
         self, principal: Principal, document_id: uuid.UUID
-    ) -> tuple[Document, list[DocumentPermission]]:
+    ) -> tuple[Document, builtins.list[DocumentPermission]]:
         return await self._get_manageable(principal, document_id)
 
     async def replace_permissions(
-        self, principal: Principal, document_id: uuid.UUID, grants_in: list[GrantInput], meta: RequestMeta
-    ) -> tuple[Document, list[DocumentPermission]]:
+        self, principal: Principal, document_id: uuid.UUID, grants_in: builtins.list[GrantInput], meta: RequestMeta
+    ) -> tuple[Document, builtins.list[DocumentPermission]]:
         document, _ = await self._get_manageable(principal, document_id)
 
         deduped: dict[tuple[PrincipalType, uuid.UUID], GrantInput] = {}
@@ -533,7 +534,7 @@ class DocumentService:
     # --- extracted content -----------------------------------------------------------------
     async def list_chunks(
         self, principal: Principal, document_id: uuid.UUID, page: PageParams
-    ) -> tuple[Document, list[DocumentChunk], int]:
+    ) -> tuple[Document, builtins.list[DocumentChunk], int]:
         """Chunks of the active index version (the extracted text; also the DOCX/Excel preview)."""
         document, _ = await self._get_visible(principal, document_id)
         chunks, total = await self.docs.list_chunks(
@@ -544,7 +545,7 @@ class DocumentService:
     # --- access helpers --------------------------------------------------------------------
     async def _get_visible(
         self, principal: Principal, document_id: uuid.UUID
-    ) -> tuple[Document, list[DocumentPermission]]:
+    ) -> tuple[Document, builtins.list[DocumentPermission]]:
         document = await self.docs.get_in_org(principal.organization_id, document_id)
         if document is None:
             raise NotFoundError("Document not found", code="document_not_found")
@@ -556,7 +557,7 @@ class DocumentService:
 
     async def _get_manageable(
         self, principal: Principal, document_id: uuid.UUID
-    ) -> tuple[Document, list[DocumentPermission]]:
+    ) -> tuple[Document, builtins.list[DocumentPermission]]:
         document, grants = await self._get_visible(principal, document_id)
         if not can_manage(principal, document, grants):
             raise PermissionDeniedError("You don't have permission to manage this document")

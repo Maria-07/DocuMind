@@ -18,6 +18,19 @@ async function shot(page: Page, name: string) {
 
 test.describe.configure({ mode: "serial" });
 
+// The production build sends a Content-Security-Policy: any violation is a bug (a blocked script,
+// style, connection or the PDF preview), so every test fails on one.
+let cspViolations: string[] = [];
+test.beforeEach(({ page }) => {
+  cspViolations = [];
+  page.on("console", (msg) => {
+    if (/Content Security Policy|Refused to (load|execute|connect|frame|apply)/i.test(msg.text())) cspViolations.push(msg.text());
+  });
+});
+test.afterEach(() => {
+  expect(cspViolations, "CSP violations").toEqual([]);
+});
+
 test("register, upload, index, ask, cite, navigate", async ({ page }) => {
   // --- Register a new organization --------------------------------------------------------
   await page.goto("/register");
@@ -241,4 +254,25 @@ test("mobile layout: collapsible navigation, usable pages", async ({ page }) => 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
   await shot(page, "12-mobile-chat");
+});
+
+test("PDF upload and in-app preview work under the CSP", async ({ page }) => {
+  await login(page, admin.email);
+  await nav(page, "Documents");
+  const dialog = page.getByRole("dialog");
+  await expect(async () => {
+    await page.getByRole("button", { name: "Upload documents" }).first().click();
+    await expect(dialog).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  await dialog.locator('input[type="file"]').setInputFiles([path.join(FIXTURES, "Travel Handbook.pdf")]);
+  await dialog.getByRole("button", { name: /Upload 1 file/ }).click();
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Travel Handbook" }).getByText("Indexed")).toBeVisible({ timeout: 180_000 });
+  await page.getByRole("link", { name: /Travel Handbook/ }).first().click();
+  await page.getByRole("tab", { name: "Preview" }).click();
+  const frame = page.locator('iframe[title="PDF preview"]');
+  await expect(frame).toBeVisible();
+  await expect(frame).toHaveAttribute("src", /^blob:/);
+  await page.waitForTimeout(1500); // let the viewer load; a CSP block would be logged by now
+  await shot(page, "19-pdf-preview");
 });

@@ -108,18 +108,20 @@ class OpenAILLM:
         final: Any = None
         refused = False
         try:
-            stream = await self.client.responses.create(
-                model=s.llm_model,
-                instructions=MARKER_ANSWER_SYSTEM_PROMPT,
-                input=[
+            # A plain dict: the SDK's typed overloads don't list every effort level.
+            request: dict[str, Any] = {
+                "model": s.llm_model,
+                "instructions": MARKER_ANSWER_SYSTEM_PROMPT,
+                "input": [
                     *_history_input(history),
                     {"role": "user", "content": build_sources_text(question, sources)},
                 ],
-                max_output_tokens=s.llm_max_tokens,  # includes reasoning tokens
-                reasoning={"effort": s.llm_effort},
-                store=False,
-                stream=True,
-            )
+                "max_output_tokens": s.llm_max_tokens,  # includes reasoning tokens
+                "reasoning": {"effort": s.llm_effort},
+                "store": False,
+                "stream": True,
+            }
+            stream = await self.client.responses.create(**request)
             async for event in stream:
                 kind = event.type
                 if kind == "response.output_text.delta":

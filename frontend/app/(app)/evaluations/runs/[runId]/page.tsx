@@ -106,10 +106,16 @@ function CaseRow({ r }: { r: EvalRunDetail["results"][number] }) {
         <TableRow className="hover:bg-transparent">
           <TableCell />
           <TableCell colSpan={6} className="space-y-3 pb-4 whitespace-normal">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground">Answer</p>
-              <p className="text-sm whitespace-pre-wrap">{r.answer ?? "—"}</p>
-            </div>
+            {r.redacted ? (
+              <p className="text-sm text-muted-foreground">
+                The answer, citations and judge notes are hidden: they draw on documents you don’t have access to. Metrics are still shown.
+              </p>
+            ) : (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">Answer</p>
+                <p className="text-sm whitespace-pre-wrap">{r.answer ?? "—"}</p>
+              </div>
+            )}
             {judge?.rationale && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground">Judge rationale</p>

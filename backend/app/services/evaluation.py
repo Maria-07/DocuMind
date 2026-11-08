@@ -7,8 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import ConflictError, NotFoundError, ServiceUnavailableError, ValidationFailedError
-from app.core.permissions import Principal
-from app.models import Document, EvalCase, EvalCaseResult, EvalDataset, EvalRun
+from app.core.permissions import Permission, Principal
+from app.models import Document, DocumentChunk, EvalCase, EvalCaseResult, EvalDataset, EvalRun
+from app.repositories.documents import visible_documents_clause
 from app.schemas.evaluation import (
     EvalCaseInput,
     EvalCaseRead,
@@ -29,6 +30,22 @@ class EvaluationService:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], queue: JobQueue) -> None:
         self.sessionmaker = sessionmaker
         self.queue = queue
+
+    # --- per-document confidentiality ------------------------------------------------------
+    # Runs execute as the user who started them, and cases are written by their author: results
+    # and quotes may contain content from documents other viewers of the same dataset cannot see.
+    @staticmethod
+    async def _hidden_documents(s: AsyncSession, principal: Principal, document_ids: set[uuid.UUID]) -> set[uuid.UUID]:
+        if not document_ids or principal.has(Permission.DOCUMENTS_ADMIN):
+            return set()
+        visible = set(
+            (
+                await s.execute(
+                    select(Document.id).where(Document.id.in_(document_ids), visible_documents_clause(principal))
+                )
+            ).scalars()
+        )
+        return document_ids - visible
 
     # --- datasets ---------------------------------------------------------------------------
     async def _dataset(self, s: AsyncSession, principal: Principal, dataset_id: uuid.UUID) -> EvalDataset:
@@ -57,7 +74,9 @@ class EvaluationService:
                         .group_by(EvalCase.dataset_id)
                         .where(EvalCase.dataset_id.in_([d.id for d in datasets]))
                     )
-                ).all()
+                )
+                .tuples()
+                .all()
             )
             out = []
             for d in datasets:
@@ -133,7 +152,25 @@ class EvaluationService:
                 .scalars()
                 .all()
             )
-            return [EvalCaseRead.model_validate(c) for c in cases]
+            hidden = await self._hidden_documents(
+                s,
+                principal,
+                {d for c in cases for d in c.relevant_document_ids}
+                | {uuid.UUID(str(e["document_id"])) for c in cases for e in c.evidence if e.get("document_id")},
+            )
+            out = []
+            for c in cases:
+                read = EvalCaseRead.model_validate(c)
+                if hidden & set(c.relevant_document_ids):
+                    read = read.model_copy(
+                        update={
+                            "expected_answer": None,
+                            "evidence": [{"document_id": e.get("document_id"), "quote": None} for e in c.evidence],
+                            "redacted": True,
+                        }
+                    )
+                out.append(read)
+            return out
 
     async def _check_documents(self, s: AsyncSession, principal: Principal, cases: list[EvalCaseInput]) -> None:
         ids = {d for c in cases for d in c.relevant_document_ids} | {e.document_id for c in cases for e in c.evidence}
@@ -278,9 +315,29 @@ class EvaluationService:
                 .all()
             )
             baseline = await s.get(EvalRun, run.baseline_run_id) if run.baseline_run_id else None
+            # Documents each answer drew on: everything retrieved for it, plus what it cites.
+            chunk_ids = {c for r in results for c in r.retrieved_chunk_ids}
+            chunk_doc: dict[uuid.UUID, uuid.UUID] = {}
+            if chunk_ids and not principal.has(Permission.DOCUMENTS_ADMIN):
+                rows = await s.execute(
+                    select(DocumentChunk.id, DocumentChunk.document_id).where(DocumentChunk.id.in_(chunk_ids))
+                )
+                chunk_doc = {chunk_id: document_id for chunk_id, document_id in rows.all()}
+
+            def used(r: EvalCaseResult) -> set[uuid.UUID]:
+                docs = {chunk_doc[c] for c in r.retrieved_chunk_ids if c in chunk_doc}
+                return docs | {uuid.UUID(str(c["document_id"])) for c in r.citations if c.get("document_id")}
+
+            hidden = await self._hidden_documents(s, principal, {d for r in results for d in used(r)})
+            reads = []
+            for r in results:
+                read = EvalCaseResultRead.model_validate(r)
+                if hidden & used(r):
+                    read = read.model_copy(update={"answer": None, "citations": [], "judge": {}, "redacted": True})
+                reads.append(read)
             return EvalRunDetail(
                 **EvalRunSummary.model_validate(run).model_dump(),
-                results=[EvalCaseResultRead.model_validate(r) for r in results],
+                results=reads,
                 baseline_metrics=baseline.metrics if baseline else None,
             )
 

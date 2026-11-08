@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -18,7 +19,7 @@ def _days(days: int) -> list[date]:
     return [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
 
 
-def _series(rows: list[tuple[date, Any]], days: list[date]) -> list[float]:
+def _series(rows: Sequence[tuple[date, Any]], days: list[date]) -> list[float]:
     values = {d: v for d, v in rows}
     return [float(values.get(d) or 0) for d in days]
 
@@ -33,7 +34,9 @@ class AnalyticsService:
         async with self.sessionmaker() as s:
             live = and_(Document.organization_id == org, Document.deleted_at.is_(None))
             by_status = dict(
-                (await s.execute(select(Document.status, func.count()).where(live).group_by(Document.status))).all()
+                (await s.execute(select(Document.status, func.count()).where(live).group_by(Document.status)))
+                .tuples()
+                .all()
             )
             storage = await s.scalar(
                 select(func.coalesce(func.sum(Document.size_bytes), 0)).where(
@@ -92,33 +95,45 @@ class AnalyticsService:
         async with self.sessionmaker() as s:
             day = cast(Document.created_at, Date)
             uploads = (
-                await s.execute(
-                    select(day, func.count())
-                    .where(Document.organization_id == org, Document.created_at >= since)
-                    .group_by(day)
+                (
+                    await s.execute(
+                        select(day, func.count())
+                        .where(Document.organization_id == org, Document.created_at >= since)
+                        .group_by(day)
+                    )
                 )
-            ).all()
+                .tuples()
+                .all()
+            )
             iday = cast(Document.indexed_at, Date)
             indexed = (
-                await s.execute(
-                    select(iday, func.count())
-                    .where(Document.organization_id == org, Document.indexed_at >= since)
-                    .group_by(iday)
+                (
+                    await s.execute(
+                        select(iday, func.count())
+                        .where(Document.organization_id == org, Document.indexed_at >= since)
+                        .group_by(iday)
+                    )
                 )
-            ).all()
+                .tuples()
+                .all()
+            )
             fday = cast(Document.updated_at, Date)
             failed = (
-                await s.execute(
-                    select(fday, func.count())
-                    .where(
-                        Document.organization_id == org,
-                        Document.status == DocumentStatus.FAILED,
-                        Document.updated_at >= since,
-                        Document.deleted_at.is_(None),
+                (
+                    await s.execute(
+                        select(fday, func.count())
+                        .where(
+                            Document.organization_id == org,
+                            Document.status == DocumentStatus.FAILED,
+                            Document.updated_at >= since,
+                            Document.deleted_at.is_(None),
+                        )
+                        .group_by(fday)
                     )
-                    .group_by(fday)
                 )
-            ).all()
+                .tuples()
+                .all()
+            )
             by_type = dict(
                 (
                     await s.execute(
@@ -126,21 +141,27 @@ class AnalyticsService:
                         .where(Document.organization_id == org, Document.deleted_at.is_(None))
                         .group_by(Document.file_type)
                     )
-                ).all()
+                )
+                .tuples()
+                .all()
             )
             activity = (
-                await s.execute(
-                    select(AuditLog.action, AuditLog.created_at, Document.title, AuditLog.resource_id)
-                    # Current title (documents are soft-deleted, so deleted ones keep theirs).
-                    .outerjoin(
-                        Document,
-                        and_(Document.organization_id == org, cast(Document.id, String) == AuditLog.resource_id),
+                (
+                    await s.execute(
+                        select(AuditLog.action, AuditLog.created_at, Document.title, AuditLog.resource_id)
+                        # Current title (documents are soft-deleted, so deleted ones keep theirs).
+                        .outerjoin(
+                            Document,
+                            and_(Document.organization_id == org, cast(Document.id, String) == AuditLog.resource_id),
+                        )
+                        .where(AuditLog.organization_id == org, AuditLog.action.like("document.%"))
+                        .order_by(AuditLog.created_at.desc())
+                        .limit(15)
                     )
-                    .where(AuditLog.organization_id == org, AuditLog.action.like("document.%"))
-                    .order_by(AuditLog.created_at.desc())
-                    .limit(15)
                 )
-            ).all()
+                .tuples()
+                .all()
+            )
         return {
             "days": [d.isoformat() for d in span],
             "uploads": _series(uploads, span),
@@ -166,17 +187,21 @@ class AnalyticsService:
         total_ms = ms("embed_ms") + ms("search_ms") + ms("postcheck_ms") + func.coalesce(ms("rerank_ms"), 0.0)
         async with self.sessionmaker() as s:
             per_day = (
-                await s.execute(
-                    select(
-                        day,
-                        func.count(),
-                        func.count().filter(RetrievalLog.no_answer.is_(True)),
-                        func.avg(RetrievalLog.top_score),
+                (
+                    await s.execute(
+                        select(
+                            day,
+                            func.count(),
+                            func.count().filter(RetrievalLog.no_answer.is_(True)),
+                            func.avg(RetrievalLog.top_score),
+                        )
+                        .where(base)
+                        .group_by(day)
                     )
-                    .where(base)
-                    .group_by(day)
                 )
-            ).all()
+                .tuples()
+                .all()
+            )
             pct = (
                 await s.execute(
                     select(

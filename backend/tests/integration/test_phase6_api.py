@@ -176,6 +176,31 @@ async def test_evaluation_dataset_run_and_metrics(
     user = await add_member(admin, make_client())
     assert (await user.client.get("/api/v1/evaluations/datasets", headers=user.headers)).status_code == 403
 
+    # Per-document confidentiality: once the policy is private, the manager still sees the metrics,
+    # but not the answer, citations, judge text, reference answer or quotes drawn from it.
+    q = "How often must passwords be rotated?"
+    doc_url = f"/api/v1/documents/{policy['id']}"
+    assert (await client.patch(doc_url, headers=admin.headers, json={"visibility": "private"})).status_code == 200
+    seen = (await manager.client.get(f"/api/v1/evaluations/results/{run['id']}", headers=manager.headers)).json()
+    hidden = next(r for r in seen["results"] if r["question"] == q)
+    assert hidden["redacted"] is True and hidden["answer"] is None
+    assert hidden["citations"] == [] and hidden["judge"] == {}
+    assert hidden["metrics"]["retrieval.recall@5"] == 1.0
+    case = next(
+        c
+        for c in (
+            await manager.client.get(f"/api/v1/evaluations/datasets/{ds['id']}/cases", headers=manager.headers)
+        ).json()
+        if c["question"] == q
+    )
+    assert case["redacted"] is True and case["expected_answer"] is None and case["evidence"][0]["quote"] is None
+    # The admin (who can view every document) still gets everything.
+    full = (await client.get(f"/api/v1/evaluations/results/{run['id']}", headers=admin.headers)).json()
+    assert next(r for r in full["results"] if r["question"] == q)["redacted"] is False
+    await client.patch(doc_url, headers=admin.headers, json={"visibility": "organization"})
+    seen = (await manager.client.get(f"/api/v1/evaluations/results/{run['id']}", headers=manager.headers)).json()
+    assert next(r for r in seen["results"] if r["question"] == q)["answer"]
+
 
 async def test_analytics_and_embeddings(
     client: httpx.AsyncClient,

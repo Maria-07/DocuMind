@@ -67,8 +67,8 @@ def create_app(settings: Settings | None = None, resources: AppResources | None 
         version="0.1.0",
         description="Enterprise Document Intelligence Platform — documents, RAG chat with citations, evaluation.",
         lifespan=lifespan,
-        openapi_url=f"{settings.api_v1_prefix}/openapi.json",
-        docs_url="/docs",
+        openapi_url=f"{settings.api_v1_prefix}/openapi.json" if settings.docs_enabled else None,
+        docs_url="/docs" if settings.docs_enabled else None,
         redoc_url=None,
     )
     if resources is not None:

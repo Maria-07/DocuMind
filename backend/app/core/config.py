@@ -24,6 +24,9 @@ class DatabaseSettings(BaseSettings):
     database_url: str
 
 
+_EXAMPLE_JWT_SECRET = "replace-with-at-least-32-random-characters"  # noqa: S105 - the placeholder we reject
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILES, extra="ignore", case_sensitive=False)
 
@@ -34,6 +37,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     cors_origins: str = "http://localhost:3000"
+    # Interactive API docs (/docs, OpenAPI schema). Default: on, except in production.
+    api_docs_enabled: bool | None = None
 
     # --- Datastores ------------------------------------------------------------------------
     database_url: str
@@ -124,6 +129,7 @@ class Settings(BaseSettings):
     # --- Rate limiting (per minute) --------------------------------------------------------
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 10  # login / register (brute-force protection)
+    rate_limit_login_per_account_per_minute: int = 10  # per target e-mail, independent of the client IP
     rate_limit_refresh_per_minute: int = 60  # token refresh (page loads, token expiry)
     rate_limit_upload_per_minute: int = 20
     rate_limit_default_per_minute: int = 300
@@ -142,6 +148,10 @@ class Settings(BaseSettings):
                 raise ValueError("COOKIE_SECURE must be true in production")
             if "*" in self.cors_origin_list:
                 raise ValueError("CORS_ORIGINS must not contain '*' in production")
+            if self.jwt_secret_key.get_secret_value() == _EXAMPLE_JWT_SECRET:
+                raise ValueError("JWT_SECRET_KEY is still the .env.example placeholder")
+            if self.qdrant_api_key is None or not self.qdrant_api_key.get_secret_value():
+                raise ValueError("QDRANT_API_KEY is required in production (Qdrant holds document text)")
         return self
 
     @model_validator(mode="after")
@@ -169,6 +179,10 @@ class Settings(BaseSettings):
         return self.embedding_tokenizer or self.embedding_model
 
     @property
+    def docs_enabled(self) -> bool:
+        return self.api_docs_enabled if self.api_docs_enabled is not None else not self.is_production
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
@@ -187,4 +201,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]  # values come from the environment
+    return Settings()  # values come from the environment

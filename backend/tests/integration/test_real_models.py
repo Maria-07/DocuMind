@@ -28,6 +28,8 @@ from tests.integration.api_helpers import register, upload_one
 from tests.integration.rag_helpers import latest_job as _latest_job
 
 TEST_QDRANT_URL = os.environ.get("TEST_QDRANT_URL")
+# A secured Qdrant (QDRANT__SERVICE__API_KEY) needs the key; falls back to the app's QDRANT_API_KEY.
+TEST_QDRANT_API_KEY = os.environ.get("TEST_QDRANT_API_KEY") or os.environ.get("QDRANT_API_KEY") or None
 MODEL_CACHE = Path(__file__).resolve().parents[2] / ".models"
 pytestmark = pytest.mark.skipif(
     not (TEST_QDRANT_URL and os.environ.get("RUN_MODEL_TESTS")), reason="RUN_MODEL_TESTS / TEST_QDRANT_URL not set"
@@ -44,7 +46,7 @@ class RealPipeline:
 async def real(resources: AppResources) -> AsyncIterator[RealPipeline]:
     resources.settings.model_cache_dir = MODEL_CACHE
     resources.settings.qdrant_collection_alias = f"test_alias_{uuid.uuid4().hex[:8]}"
-    client = AsyncQdrantClient(url=TEST_QDRANT_URL)
+    client = AsyncQdrantClient(url=TEST_QDRANT_URL, api_key=TEST_QDRANT_API_KEY)
     holder = RealPipeline(
         await build_ingestion_pipeline(
             settings=resources.settings, sessionmaker=resources.sessionmaker, storage=resources.storage, qdrant=client

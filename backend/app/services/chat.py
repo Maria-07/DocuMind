@@ -11,6 +11,7 @@ If retrieval finds nothing relevant enough, the model is not called at all and t
 from __future__ import annotations
 
 import asyncio
+import builtins
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -60,7 +61,7 @@ class PreparedAsk:
     user_message_id: uuid.UUID
     assistant_message_id: uuid.UUID
     question: str
-    history: list[ChatTurn]
+    history: builtins.list[ChatTurn]
     filters: RetrievalFilters
     started: float = field(default_factory=time.perf_counter)
 
@@ -154,7 +155,7 @@ class ChatService:
             await s.commit()
             return conv
 
-    async def list(self, principal: Principal, page: PageParams) -> tuple[list[Conversation], int]:
+    async def list(self, principal: Principal, page: PageParams) -> tuple[builtins.list[Conversation], int]:
         conditions = (
             Conversation.user_id == principal.user_id,
             Conversation.organization_id == principal.organization_id,
@@ -177,7 +178,9 @@ class ChatService:
             )
         return list(rows), int(total or 0)
 
-    async def get(self, principal: Principal, conversation_id: uuid.UUID) -> tuple[Conversation, list[MessageRead]]:
+    async def get(
+        self, principal: Principal, conversation_id: uuid.UUID
+    ) -> tuple[Conversation, builtins.list[MessageRead]]:
         async with self.sessionmaker() as s:
             conv = await self._owned(s, principal, conversation_id)
             messages = (
@@ -191,7 +194,7 @@ class ChatService:
                 .scalars()
                 .all()
             )
-            citations: dict[uuid.UUID, list[MessageCitation]] = {}
+            citations: dict[uuid.UUID, builtins.list[MessageCitation]] = {}
             if messages:
                 for row in (
                     await s.execute(
@@ -362,7 +365,7 @@ class ChatService:
         ask: PreparedAsk,
         status: str,
         content: str,
-        citations: list[Citation],
+        citations: builtins.list[Citation],
         search_query: str,
         model: str | None,
         usage: dict[str, Any],

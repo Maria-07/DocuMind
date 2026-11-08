@@ -11,7 +11,7 @@ Rules (see docs/architecture.md §2.2):
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -155,7 +155,9 @@ class Chunker:
         for text, start, end in self._pack(header, records):
             yield _Piece("rows", text, block, row_start=start, row_end=end)
 
-    def _pack(self, header: str, records: list[tuple[int | None, str]]) -> Iterator[tuple[str, int | None, int | None]]:
+    def _pack(
+        self, header: str, records: Sequence[tuple[int | None, str]]
+    ) -> Iterator[tuple[str, int | None, int | None]]:
         """Greedily pack records under a repeated header without exceeding chunk_size."""
         header_tokens = self.counter.count(header) + 1 if header else 0
         budget = max(self.chunk_size - header_tokens, self.chunk_size // 4)

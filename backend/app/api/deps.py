@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 
@@ -117,6 +118,19 @@ def rate_limit_by_ip(scope: str, limit_setting: str) -> Callable[..., Awaitable[
             raise _rate_limited(result.reset_in_seconds)
 
     return dependency
+
+
+async def rate_limit_identifier(resources: AppResources, scope: str, identifier: str, limit_setting: str) -> None:
+    """Limit by a request-body identifier (e.g. the e-mail of a login attempt).
+
+    Complements the per-IP limit: the client IP comes from X-Forwarded-For when the app runs behind
+    a proxy, so it is only as trustworthy as that proxy; an identifier-keyed limit cannot be dodged
+    by varying the IP. The identifier is hashed so no personal data ends up in Redis keys.
+    """
+    digest = hashlib.sha256(identifier.strip().lower().encode()).hexdigest()[:32]
+    result = await resources.rate_limiter.hit(f"{scope}:id:{digest}", int(getattr(resources.settings, limit_setting)))
+    if not result.allowed:
+        raise _rate_limited(result.reset_in_seconds)
 
 
 def rate_limit_by_user(scope: str, limit_setting: str) -> Callable[..., Awaitable[None]]:

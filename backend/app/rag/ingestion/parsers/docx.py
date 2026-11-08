@@ -89,7 +89,7 @@ def parse_docx(path: Path) -> ParsedDocument:
                 paragraph_buffer.append(text)
         elif child.tag == qn("w:tbl"):
             flush()
-            markdown = rows_to_markdown(_table_rows(Table(child, document)))  # type: ignore[arg-type]
+            markdown = rows_to_markdown(_table_rows(Table(child, document)))
             if markdown:
                 blocks.append(Block(kind="table", text=markdown, section_path=section()))
     flush()

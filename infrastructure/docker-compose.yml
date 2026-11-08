@@ -1,101 +1,162 @@
-# DocuMind local stack. Run from the repo root:
-#   docker compose -f infrastructure/docker-compose.yml --env-file .env up --build
+# DocuMind — full stack (production-like). From the repo root:
+#   docker compose -f infrastructure/docker-compose.yml --env-file .env up -d --build
+# Open https://localhost (or https://$SITE_ADDRESS). See docs/deployment.md.
+#
+# Only Caddy publishes ports. Two networks keep the backend unreachable except from the frontend:
+#   edge     — caddy, frontend
+#   internal — frontend, backend, worker, migrate, postgres, redis, qdrant
+# (The backend trusts X-Forwarded-For because of this layout — see infrastructure/caddy/Caddyfile.)
 name: documind
 
-x-backend-env: &backend-env
+x-backend: &backend
+  build: ../backend
   env_file: ../.env
   environment:
+    ENVIRONMENT: ${STACK_ENVIRONMENT:-production}
+    LOG_JSON: "true"
+    COOKIE_SECURE: "true"
+    CORS_ORIGINS: https://${SITE_ADDRESS:-localhost}
+    # POSTGRES_PASSWORD must be URL-safe here (e.g. generated with secrets.token_hex).
     DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     REDIS_URL: redis://redis:6379/0
     QDRANT_URL: http://qdrant:6333
     STORAGE_LOCAL_PATH: /data/storage
+    MODEL_CACHE_DIR: /data/models
+    HF_HOME: /data/models/hf
+    FORWARDED_ALLOW_IPS: "*"
+  volumes:
+    - file-storage:/data/storage
+    - model-cache:/data/models
+  networks: [internal]
 
 services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-0}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+    networks: [edge]
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        API_URL: http://backend:8000
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [edge, internal]
+
+  backend:
+    <<: *backend
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    <<: *backend
+    command: ["arq", "app.workers.settings.WorkerSettings"]
+    restart: unless-stopped
+    stop_grace_period: 60s  # let in-flight ingestion jobs finish (arq stops taking new ones on SIGTERM)
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.workers.settings.WorkerSettings"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 20
+    networks: [internal]
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
+    networks: [internal]
 
   qdrant:
     image: qdrant/qdrant:v1.20.0  # keep in sync with qdrant-client and the native binary
+    restart: unless-stopped
     environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?set QDRANT_API_KEY in .env}
     volumes:
       - qdrant-data:/qdrant/storage
       - ./qdrant/config.yaml:/qdrant/config/production.yaml:ro
-    ports:
-      - "127.0.0.1:6333:6333"
-      - "127.0.0.1:6334:6334"
-
-  migrate:
-    build: ../backend
-    <<: *backend-env
-    command: ["alembic", "upgrade", "head"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
-
-  backend:
-    build: ../backend
-    <<: *backend-env
-    volumes:
-      - file-storage:/data/storage
-    ports:
-      - "127.0.0.1:8000:8000"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 10s
+      # The image has no curl/wget; /readyz needs no API key.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /readyz HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3'"]
+      interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+    networks: [internal]
 
-  worker:
-    build: ../backend
-    <<: *backend-env
-    command: ["arq", "app.workers.settings.WorkerSettings"]
-    volumes:
-      - file-storage:/data/storage
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
+networks:
+  edge:
+  internal:
 
 volumes:
   postgres-data:
   redis-data:
   qdrant-data:
   file-storage:
+  model-cache:
+  caddy-data:
+  caddy-config:

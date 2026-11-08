@@ -119,6 +119,7 @@ class AnthropicLLM:
             "output_config": {"effort": "low" if s.llm_effort in ("none", "minimal") else s.llm_effort},
         }
         try:
+            manager: Any  # the beta (refusal fallback) and GA stream managers share this interface
             if s.llm_refusal_fallback:
                 manager = self.client.beta.messages.stream(**kwargs, betas=[_FALLBACK_BETA], fallbacks="default")
             else:
@@ -131,7 +132,7 @@ class AnthropicLLM:
                             yield TextDelta(delta.text)
                         elif delta.type == "citations_delta":
                             c = delta.citation
-                            if getattr(c, "type", None) == "content_block_location":
+                            if c.type == "content_block_location":
                                 yield CitationDelta(
                                     source_index=c.document_index,
                                     cited_text=c.cited_text,
@@ -155,13 +156,15 @@ class AnthropicLLM:
     ) -> dict[str, Any]:
         effort = "low" if self.settings.llm_effort in ("none", "minimal") else self.settings.llm_effort
         try:
-            response = await self.client.messages.create(
-                model=self.settings.llm_model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
-                output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-            )
+            # A plain dict: the SDK's typed overloads lag behind output_config.format.
+            request: dict[str, Any] = {
+                "model": self.settings.llm_model,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": prompt}],
+                "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+            }
+            response = await self.client.messages.create(**request)
         except anthropic.APIError as exc:
             log.warning("llm_json_failed", task=name, error=type(exc).__name__)
             raise _to_generation_error(exc) from exc

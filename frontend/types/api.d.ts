@@ -1280,6 +1280,12 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Redacted
+             * @description Reference answer / quotes hidden: they come from documents the caller cannot view
+             * @default false
+             */
+            redacted: boolean;
         };
         /** EvalCaseResultRead */
         EvalCaseResultRead: {
@@ -1312,6 +1318,12 @@ export interface components {
             top_relevance: number | null;
             /** Error */
             error: string | null;
+            /**
+             * Redacted
+             * @description Answer, citations and judge text hidden (documents the caller cannot view)
+             * @default false
+             */
+            redacted: boolean;
         };
         /** EvalDatasetCreate */
         EvalDatasetCreate: {

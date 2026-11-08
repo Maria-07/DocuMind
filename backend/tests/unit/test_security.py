@@ -160,3 +160,25 @@ def test_short_jwt_secret_rejected() -> None:
 def test_production_requires_secure_cookies() -> None:
     with pytest.raises(ValueError, match="COOKIE_SECURE"):
         make_settings(environment="production", cookie_secure=False)
+
+
+def _production(**overrides: object) -> dict[str, object]:
+    return {"environment": "production", "cookie_secure": True, "qdrant_api_key": "q" * 40, **overrides}
+
+
+def test_production_rejects_the_example_jwt_secret() -> None:
+    with pytest.raises(ValueError, match="placeholder"):
+        make_settings(**_production(jwt_secret_key="replace-with-at-least-32-random-characters"))
+
+
+def test_production_requires_a_qdrant_api_key() -> None:
+    with pytest.raises(ValueError, match="QDRANT_API_KEY"):
+        make_settings(**_production(qdrant_api_key=None))
+    with pytest.raises(ValueError, match="QDRANT_API_KEY"):
+        make_settings(**_production(qdrant_api_key=""))
+
+
+def test_api_docs_default_off_in_production_only() -> None:
+    assert make_settings().docs_enabled is True
+    assert make_settings(**_production()).docs_enabled is False
+    assert make_settings(**_production(api_docs_enabled=True)).docs_enabled is True

@@ -1,10 +1,12 @@
 # DocuMind — Enterprise Document Intelligence Platform
 
+[![CI](https://github.com/Maria-07/DocuMind/actions/workflows/ci.yml/badge.svg)](https://github.com/Maria-07/DocuMind/actions/workflows/ci.yml)
+
 Upload, manage, search and chat with your organization's documents (PDF, DOCX, XLSX, XLS) using
 Retrieval-Augmented Generation with source citations, strict per-document permissions, and a
 built-in RAG evaluation framework.
 
-> Architecture & design: [docs/architecture.md](docs/architecture.md)
+> Architecture & design: [docs/architecture.md](docs/architecture.md) · Deployment & operations: [docs/deployment.md](docs/deployment.md)
 
 ## Status
 
@@ -16,7 +18,7 @@ built-in RAG evaluation framework.
 | 4 | RAG: permission-aware hybrid retrieval, cross-encoder reranking, grounded streaming answers with validated citations, conversations, search API, retrieval-accuracy benchmark; Anthropic or OpenAI (e.g. gpt-5-nano) | ✅ done |
 | 5 | Frontend: Next.js 16 dashboard — auth, documents (drag & drop upload, live status, extracted content, PDF preview), streaming AI chat with clickable citations, user management, settings; responsive; Playwright e2e | ✅ done |
 | 6 | Grounded document comparison, RAG evaluation module (datasets, LLM judge, regression gating, trends), organization analytics, embedding/re-index management, document sharing & groups UI | ✅ done |
-| 7 | Hardening, deployment | — |
+| 7 | Hardening & deployment: Docker images (non-root, standalone Next.js), Compose stack behind Caddy (TLS, real client IP, only 80/443 published), production config guards, CSP, per-account login limits, per-document redaction in evaluations, pinned dependencies + audits, strict typing (mypy), CI with a containerized end-to-end smoke test, deployment/backup/upgrade guide | ✅ done |
 
 **What works today:** registration/login/refresh/logout, role- and grant-based document access,
 uploads with content validation and de-duplication, listing/search/filter, download/preview, soft
@@ -101,14 +103,18 @@ docs/             architecture & design
 
 ## Running locally
 
-### Option A — Docker Compose (everything)
+### Option A — Docker Compose (production-like, everything)
 
 ```bash
-cp .env.example .env            # then set POSTGRES_PASSWORD, JWT_SECRET_KEY, ...
-docker compose -f infrastructure/docker-compose.yml --env-file .env up --build
+cp .env.example .env     # set POSTGRES_PASSWORD (hex), JWT_SECRET_KEY, QDRANT_API_KEY, SITE_ADDRESS, LLM key
+docker compose -f infrastructure/docker-compose.yml --env-file .env up -d --build
 ```
 
-Starts PostgreSQL, Redis, Qdrant, runs migrations, then the API (http://localhost:8000/docs) and worker.
+Builds the images, runs migrations and starts PostgreSQL, Redis, Qdrant, the API, the worker, the
+Next.js frontend and Caddy. Open **https://localhost** (or your `SITE_ADDRESS`). Only Caddy
+publishes ports. See [docs/deployment.md](docs/deployment.md) for TLS, backups, upgrades and scaling.
+To run just the datastores in Docker and the app natively, add
+`-f infrastructure/docker-compose.datastores.yml` and start `postgres redis qdrant`.
 
 ### Option B — Native (no Docker)
 
@@ -189,7 +195,17 @@ Integration tests run the real Alembic migrations against `TEST_DATABASE_URL` an
 database**; the suite refuses to run unless the database name contains `test`. Without
 `TEST_DATABASE_URL` they are skipped.
 
-Lint: `ruff check app tests alembic`.
+Lint & types: `ruff check app tests alembic` · `ruff format --check app tests alembic` · `mypy app`.
+Dependencies are pinned in `backend/constraints.txt` (`pip install -r requirements-dev.txt -c constraints.txt`).
+
+Browser tests (Playwright, against a running stack; the production build is checked for CSP violations):
+`cd frontend && npx playwright test`. Whole-stack smoke test (any deployment):
+`python infrastructure/smoke_test.py https://localhost --insecure --production`.
+
+**CI** (`.github/workflows/ci.yml`) runs on every push: backend lint, format, mypy, migrations
+check, the full unit + integration suite against PostgreSQL and Qdrant, dependency audits; frontend
+lint, typecheck, build; then builds the Docker images, starts the whole stack and runs the smoke test
+through Caddy — including a check that a spoofed `X-Forwarded-For` is not recorded as the client IP.
 
 ## API overview (v1)
 
@@ -225,5 +241,16 @@ Interactive docs: `/docs`. All endpoints except register/login/refresh/logout re
   ids return 404. The same rules are encoded as organization-qualified ACL tokens for Qdrant (Phase 3).
 - **Uploads:** extension allow-list + content sniffing, macro rejection, zip-bomb guard, size/count
   limits enforced before parsing, files stored outside any web root under random keys.
+- **Evaluations:** results and test cases are redacted per viewer — answers, citations, judge notes,
+  reference answers and quotes drawn from documents the viewer cannot see are withheld (metrics stay).
+- **Edge & network:** TLS at Caddy; only 80/443 published; the backend is reachable from the
+  frontend alone, which is what makes trusting `X-Forwarded-For` (set by Caddy) safe. Login is
+  rate-limited per IP **and** per target account, so rotating IPs does not help an attacker.
+- **Headers:** CSP (no third-party origins, no framing, `object-src`/`frame-src` limited to self and
+  blob: for the PDF preview), `X-Frame-Options`, `nosniff`, `Referrer-Policy: no-referrer`,
+  `Permissions-Policy`; HSTS at the edge and on the API in production.
+- **Production guards:** the API refuses to start with insecure settings (non-secure cookies,
+  wildcard CORS, the example JWT secret, no Qdrant API key); API docs are off in production.
 - **Operations:** audit log for security-relevant actions, Redis rate limiting, request ids,
-  structured logs with secret redaction, security headers.
+  structured JSON logs with secret redaction, non-root containers, pinned dependencies with
+  `pip-audit` / `npm audit` in CI.

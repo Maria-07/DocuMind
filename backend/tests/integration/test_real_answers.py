@@ -30,6 +30,8 @@ from tests.integration.rag_helpers import run_ingestion
 from tests.integration.test_retrieval_chat import _ask, _new_conversation
 
 TEST_QDRANT_URL = os.environ.get("TEST_QDRANT_URL")
+# A secured Qdrant (QDRANT__SERVICE__API_KEY) needs the key; falls back to the app's QDRANT_API_KEY.
+TEST_QDRANT_API_KEY = os.environ.get("TEST_QDRANT_API_KEY") or os.environ.get("QDRANT_API_KEY") or None
 MODEL_CACHE = Path(__file__).resolve().parents[2] / ".models"
 PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
 MODEL = os.environ.get("LLM_MODEL", "gpt-5-nano" if PROVIDER == "openai" else "claude-opus-5-5")
@@ -66,7 +68,7 @@ async def stack(resources: AppResources) -> AsyncIterator[RealStack]:
         s.llm_effort = os.environ.get("LLM_EFFORT", "low")  # type: ignore[assignment]
     else:
         s.anthropic_api_key = SecretStr(os.environ[KEY_VAR])
-    client = AsyncQdrantClient(url=TEST_QDRANT_URL)
+    client = AsyncQdrantClient(url=TEST_QDRANT_URL, api_key=TEST_QDRANT_API_KEY)
     pipeline = await build_ingestion_pipeline(
         settings=s, sessionmaker=resources.sessionmaker, storage=resources.storage, qdrant=client
     )

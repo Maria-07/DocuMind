@@ -143,6 +143,8 @@ def make_client(resources: AppResources):  # type: ignore[no-untyped-def]
 # --- RAG fixtures (need TEST_QDRANT_URL) ----------------------------------------------------
 
 TEST_QDRANT_URL = os.environ.get("TEST_QDRANT_URL")
+# A secured Qdrant (QDRANT__SERVICE__API_KEY) needs the key; falls back to the app's QDRANT_API_KEY.
+TEST_QDRANT_API_KEY = os.environ.get("TEST_QDRANT_API_KEY") or os.environ.get("QDRANT_API_KEY") or None
 
 
 @pytest.fixture
@@ -151,7 +153,7 @@ async def qdrant() -> AsyncIterator[Any]:
         pytest.skip("TEST_QDRANT_URL not set")
     from qdrant_client import AsyncQdrantClient
 
-    client = AsyncQdrantClient(url=TEST_QDRANT_URL)
+    client = AsyncQdrantClient(url=TEST_QDRANT_URL, api_key=TEST_QDRANT_API_KEY)
     yield client
     await client.close()
 

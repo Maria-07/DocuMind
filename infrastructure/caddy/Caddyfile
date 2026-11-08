@@ -1,0 +1,29 @@
+# DocuMind edge: TLS termination and the only published entry point.
+#
+# SITE_ADDRESS: your domain (automatic Let's Encrypt certificates) or "localhost"
+# (certificate from Caddy's internal CA — trust it or use curl -k).
+#
+# Client IP: Caddy ignores X-Forwarded-For from clients (no trusted_proxies configured) and sets it
+# to the real peer address. Next.js forwards that header unchanged, and the backend trusts it only
+# because nothing but the frontend can reach the backend (see networks in docker-compose.yml).
+# If you put another proxy/load balancer in front of Caddy, add it under `trusted_proxies`.
+{
+	admin off
+}
+
+{$SITE_ADDRESS:localhost} {
+	reverse_proxy frontend:3000 {
+		# Chat answers are Server-Sent Events: never buffer responses.
+		flush_interval -1
+	}
+	header {
+		# Set HSTS_MAX_AGE=63072000 once the site is served from a real domain with a valid certificate.
+		Strict-Transport-Security "max-age={$HSTS_MAX_AGE:0}"
+		-Server
+		-X-Powered-By
+	}
+	log {
+		output stdout
+		format json
+	}
+}

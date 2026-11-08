@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,11 +20,11 @@ class GroupService:
         self.groups = GroupRepository(session)
         self.users = UserRepository(session)
 
-    async def _read(self, groups: list[UserGroup]) -> list[GroupRead]:
+    async def _read(self, groups: builtins.list[UserGroup]) -> builtins.list[GroupRead]:
         members = await self.groups.member_ids([g.id for g in groups])
         return [GroupRead.model_validate(g).model_copy(update={"member_ids": members.get(g.id, [])}) for g in groups]
 
-    async def list(self, principal: Principal) -> list[GroupRead]:
+    async def list(self, principal: Principal) -> builtins.list[GroupRead]:
         return await self._read(list(await self.groups.list_in_org(principal.organization_id)))
 
     async def get(self, principal: Principal, group_id: uuid.UUID) -> GroupRead:
@@ -79,7 +80,7 @@ class GroupService:
         return (await self._read([group]))[0]
 
     async def set_members(
-        self, principal: Principal, group_id: uuid.UUID, user_ids: list[uuid.UUID], meta: RequestMeta
+        self, principal: Principal, group_id: uuid.UUID, user_ids: builtins.list[uuid.UUID], meta: RequestMeta
     ) -> GroupRead:
         group = await self._get(principal, group_id)
         existing = await self.users.ids_existing_in_org(principal.organization_id, user_ids)

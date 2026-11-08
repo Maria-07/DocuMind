@@ -367,6 +367,9 @@ export default function DatasetPage() {
                     <div className="min-w-0 flex-1">
                       <p className="font-medium">{c.question}</p>
                       {c.expected_answer && <p className="mt-1 line-clamp-2 text-muted-foreground">{c.expected_answer}</p>}
+                      {c.redacted && (
+                        <p className="mt-1 text-xs text-muted-foreground">Reference answer and quotes hidden — from documents you can’t access.</p>
+                      )}
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
                         {c.relevant_document_ids.length ? (
                           <Badge variant="secondary">

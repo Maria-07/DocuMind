@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.api.deps import CurrentPrincipal, DbSession, Meta, SettingsDep, rate_limit_by_ip
+from app.api.deps import (
+    CurrentPrincipal,
+    DbSession,
+    Meta,
+    Resources,
+    SettingsDep,
+    rate_limit_by_ip,
+    rate_limit_identifier,
+)
 from app.core.config import Settings
 from app.repositories.users import OrganizationRepository, UserRepository
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, MeResponse, RegisterRequest, TokenResponse
@@ -72,8 +80,14 @@ async def register(
 
 @router.post("/login", response_model=TokenResponse, dependencies=_auth_rate_limit)
 async def login(
-    data: LoginRequest, response: Response, session: DbSession, settings: SettingsDep, meta: Meta
+    data: LoginRequest,
+    response: Response,
+    session: DbSession,
+    settings: SettingsDep,
+    meta: Meta,
+    resources: Resources,
 ) -> TokenResponse:
+    await rate_limit_identifier(resources, "login", str(data.email), "rate_limit_login_per_account_per_minute")
     issued = await AuthService(session, settings).login(data, meta)
     _set_refresh_cookie(response, issued, settings)
     return _token_response(issued)

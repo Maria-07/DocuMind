@@ -81,3 +81,5 @@ class WorkerSettings:
     max_tries = _settings.ingestion_max_tries
     job_timeout = _settings.worker_job_timeout_seconds
     keep_result = 3600
+    # Heartbeat for `arq --check` (container health checks): written every minute while alive.
+    health_check_interval = 60

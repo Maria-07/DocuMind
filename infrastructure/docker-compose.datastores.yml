@@ -1,0 +1,10 @@
+# Datastores only, published on localhost — for running the API/worker/frontend natively.
+#   docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.datastores.yml \
+#     --env-file .env up -d postgres redis qdrant
+services:
+  postgres:
+    ports: ["127.0.0.1:5432:5432"]
+  redis:
+    ports: ["127.0.0.1:6379:6379"]
+  qdrant:
+    ports: ["127.0.0.1:6333:6333", "127.0.0.1:6334:6334"]

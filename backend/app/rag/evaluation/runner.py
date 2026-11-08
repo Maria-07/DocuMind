@@ -211,9 +211,9 @@ class EvaluationRunner:
             metrics["answer.citations_rejected"] = tracker.rejected
             if citations and answerable:
                 hits = [
-                    (uuid.UUID(c["chunk_id"]) in relevant_chunks)
+                    (uuid.UUID(str(c["chunk_id"])) in relevant_chunks)
                     if relevant_chunks
-                    else (uuid.UUID(c["document_id"]) in relevant_docs)
+                    else (uuid.UUID(str(c["document_id"])) in relevant_docs)
                     for c in citations
                 ]
                 metrics["answer.citation_precision"] = sum(hits) / len(hits)

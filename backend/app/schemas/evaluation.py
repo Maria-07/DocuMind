@@ -36,6 +36,9 @@ class EvalCaseRead(ORMModel):
     evidence: list[dict[str, Any]]
     tags: list[str]
     created_at: datetime
+    redacted: bool = Field(
+        default=False, description="Reference answer / quotes hidden: they come from documents the caller cannot view"
+    )
 
 
 class EvalDatasetCreate(BaseModel):
@@ -87,6 +90,9 @@ class EvalCaseResultRead(ORMModel):
     latency_ms: int | None
     top_relevance: float | None
     error: str | None
+    redacted: bool = Field(
+        default=False, description="Answer, citations and judge text hidden (documents the caller cannot view)"
+    )
 
 
 class EvalRunDetail(EvalRunSummary):

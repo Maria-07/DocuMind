@@ -586,6 +586,20 @@ Docker Compose services: `frontend`, `backend`, `worker`, `postgres`, `qdrant`, 
 - Prompt-injection defenses as in §3.2.
 - Tests explicitly covering cross-tenant and cross-user leakage at the API **and** retrieval layers.
 
+> **As implemented (Phase 7).**
+> - **Proxy chain:** client → Caddy (TLS; replaces any client `X-Forwarded-For`) → Next.js
+>   (forwards it unchanged) → FastAPI. Uvicorn trusts the header only because the backend sits on an
+>   internal network that only the frontend can reach.
+> - **Login rate limits:** per IP and also per target account, so spoofing or rotating IPs doesn't
+>   bypass them.
+> - **Production guards:** the API refuses to start with non-secure cookies, wildcard CORS, the
+>   example JWT secret, or no Qdrant API key. API docs are off in production.
+> - **Content-Security-Policy:** production-only. It needs `'unsafe-inline'` for scripts, because
+>   nonces would require a Next.js proxy, which also caps upload bodies. It allows `blob:` for the
+>   PDF preview. The e2e suite fails on any CSP violation.
+> - **Evaluations:** results and cases are redacted per viewer for documents the viewer cannot see.
+> - **Ops details** (Docker stack, backups, upgrades, scaling) are in [deployment.md](deployment.md).
+
 ---
 
 ## 10. Evaluation module design

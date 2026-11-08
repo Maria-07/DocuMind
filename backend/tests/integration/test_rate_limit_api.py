@@ -32,3 +32,16 @@ async def test_refresh_has_its_own_budget(client: httpx.AsyncClient, resources: 
     assert (await login(client, "budget@example.com")).status_code == 429  # auth budget spent
     refresh_codes = [(await client.post("/api/v1/auth/refresh")).status_code for _ in range(6)]
     assert refresh_codes == [200] * 5 + [429]  # independent, larger budget
+
+
+async def test_login_is_limited_per_account_independent_of_ip(
+    client: httpx.AsyncClient, resources: AppResources
+) -> None:
+    """The client IP can come from X-Forwarded-For, so a per-IP limit alone can be dodged."""
+    resources.settings.rate_limit_auth_per_minute = 100
+    resources.settings.rate_limit_login_per_account_per_minute = 2
+    codes = [(await login(client, "Victim@Example.com", "Wrong-password-1")).status_code for _ in range(3)]
+    assert codes == [401, 401, 429]
+    # Normalized: case variants of the same address share the budget; other accounts are unaffected.
+    assert (await login(client, "victim@example.com", "Wrong-password-1")).status_code == 429
+    assert (await login(client, "someone-else@example.com", "Wrong-password-1")).status_code == 401

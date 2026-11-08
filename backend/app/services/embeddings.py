@@ -8,7 +8,7 @@ from typing import Any, Literal
 import structlog
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import ColumnElement, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import Document, EmbeddingConfig, IngestionJob
@@ -42,7 +42,7 @@ async def queue_reindex(
         if organization_id is not None:
             stmt = stmt.where(Document.organization_id == organization_id)
         if mode == "stale":
-            stale = Document.embedding_config_id.is_(None)
+            stale: ColumnElement[bool] = Document.embedding_config_id.is_(None)
             if active is not None:
                 stale = or_(stale, Document.embedding_config_id != active)
             stmt = stmt.where(stale, Document.status != DocumentStatus.FAILED)
@@ -76,7 +76,9 @@ async def embedding_overview(
                     .where(*live)
                     .group_by(Document.embedding_config_id)
                 )
-            ).all()
+            )
+            .tuples()
+            .all()
         )
         total = await s.scalar(select(func.count()).where(*live))
         failed = await s.scalar(select(func.count()).where(*live, Document.status == DocumentStatus.FAILED))
@@ -87,7 +89,9 @@ async def embedding_overview(
                     .where(*live)
                     .group_by(Document.embedding_config_id)
                 )
-            ).all()
+            )
+            .tuples()
+            .all()
         )
     active = next((c for c in configs if c.is_active), None)
     out = []

@@ -21,8 +21,15 @@ Write-Host "Qdrant data: $env:QDRANT__STORAGE__STORAGE_PATH"
 # Use the same API key as the app, if one is configured in the repo .env.
 $envFile = Join-Path $here "..\..\.env"
 if (Test-Path $envFile) {
-    $line = Get-Content $envFile | Where-Object { $_ -match '^\s*QDRANT_API_KEY\s*=\s*(\S+)' } | Select-Object -First 1
-    if ($line -and $Matches[1]) { $env:QDRANT__SERVICE__API_KEY = $Matches[1] }
+    # Parse the value the way the app (python-dotenv) does: surrounding quotes and, for unquoted
+    # values, an inline " # comment" are not part of the key.
+    $line = Get-Content $envFile | Where-Object { $_ -match '^\s*QDRANT_API_KEY\s*=' } | Select-Object -First 1
+    if ($line) {
+        $val = ($line -split '=', 2)[1].Trim()
+        if ($val -match '^"([^"]*)"' -or $val -match "^'([^']*)'") { $val = $Matches[1] }
+        else { $val = ($val -split '\s+#', 2)[0].Trim() }
+        if ($val) { $env:QDRANT__SERVICE__API_KEY = $val }
+    }
 }
 
 Set-Location $here
