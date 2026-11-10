@@ -164,8 +164,12 @@ The home page shows:
 1. On **Documents**, choose **Upload documents**.
 2. Drag files in, or click to browse.
 3. Choose **Who can see these documents** (visibility) and, optionally, a **Category**.
-4. Upload. A progress bar shows the transfer. Each file then appears with status *uploaded* and
-   moves to *indexed* on its own; the page updates live.
+4. Upload. Files are sent in parallel, three at a time, each in its own request with its own
+   progress bar, so a large file doesn't hold back the smaller ones. Each file appears in the list as
+   soon as its own upload finishes, with status *uploaded*, and moves to *indexed* on its own; the
+   page updates live.
+   You can add more files while others upload. You can also close the dialog: uploads in progress
+   continue, and a notification reports the result.
 
 Upload rules:
 
@@ -242,12 +246,72 @@ Sharing only has effect when visibility is **Restricted** (or, for *Can manage* 
 
 1. Open **AI Chat** and type a question, for example *"How long are customer database backups
    kept?"*.
-2. While the answer is prepared you see the stages: *Searching your documents*, then *Reading
-   sources*. The answer then streams in word by word.
+2. While the answer is prepared you see the stages: *Thinking* (DocuMind decides whether your
+   message needs your documents), then, for document questions, *Searching your documents* and
+   *Reading sources*. The answer then streams in word by word.
 3. Use **Stop** to interrupt an answer.
 
 Conversations are saved in the list on the left. They are private to you. Follow-up questions use
 the last few turns as context, so *"and for the HR system?"* works.
+
+### Chatting naturally
+
+You don't have to start with a question about a file. DocuMind decides for each message whether it
+needs your documents:
+
+| You say | DocuMind does |
+|---|---|
+| A greeting, thanks, goodbye ("Hello!", "Thanks!") | Replies in a sentence or two. No search, no citations |
+| "What can you do?", "Who are you?" | Explains briefly what it can help with |
+| A general question or writing help ("Explain what a REST API is") | Answers from general knowledge and says so; it is **not** from your documents |
+| Anything about your organization's rules, figures, files or people | Searches your documents and answers with citations |
+
+Replies that need no documents carry no citations and no warning badge. When a *document* question
+can't be backed by a citation, the answer shows **Not backed by document citations**.
+
+When DocuMind is unsure, it searches your documents; it never answers a question about your
+organization from memory. If you ever get a general answer to a question that should have used your
+documents, ask again naming the topic or document.
+
+### Choosing a model
+
+The model picker sits at the bottom left of the message box. It lists every model your administrator has
+made available (those whose provider key is configured), grouped by provider, with its price per million
+input and output tokens. The choice is remembered in your browser and applies to your next message, so you
+can switch models in the middle of a conversation: the history is plain text and works with any model.
+
+- A model that just failed because its quota or usage limit is used up is greyed out in the list, with the
+  provider's explanation (for example when access returns). It becomes selectable again once it works, or
+  after ten minutes.
+- Cheaper models suit simple questions; larger ones help with hard reasoning. Document answers are
+  grounded in the same retrieved passages whichever model writes them.
+
+### Editing and resubmitting a message
+
+Point at one of your messages and choose the pencil icon. Change the text (or leave it as it is to ask
+again with a different model) and choose **Resubmit**.
+
+- Your message and every reply after it are replaced by the new answer. The answer is written using only
+  the conversation *before* the edited message.
+- Nothing is deleted: the replaced messages are kept out of sight in the database (for the audit trail),
+  but they no longer appear and are not sent to the model.
+- An edited message is marked *edited*. If you edit the first message, the conversation is renamed after it.
+- You can only edit your own messages, and not while a reply is being written.
+
+### What a reply costs
+
+Under every reply a line shows the model, the tokens and the **estimated cost**, for example
+*Gemini 3.5 Flash-Lite · 1,529 in · 124 out · $0.0004*. Point at it for the breakdown:
+
+- **Answer**: the model you chose. Tokens *in* are your question, the conversation and any retrieved
+  passages; tokens *out* are the reply (for reasoning models this includes their hidden thinking).
+- **Routing**: the small call that decides whether your message needs your documents. It runs on the
+  default (or configured routing) model, not the one you picked, and is skipped for plain greetings.
+- How long the reply took, and cached or reasoning tokens where the provider reports them.
+
+The conversation header shows the running total. Costs are **estimates**: provider-reported token counts
+multiplied by the prices in the model catalog. They are saved with each reply, so changing a price later
+does not rewrite history. If a model has no price in the catalog you see *cost n/a* and only tokens.
 
 ### Citations
 
@@ -262,8 +326,8 @@ it claims to quote; a citation that doesn't match is dropped and never shown.
 
 ### When the documents don't say
 
-If no document is relevant enough, DocuMind says it couldn't find the answer instead of guessing.
-In that case the language model isn't called at all.
+If no document is relevant enough, DocuMind says it couldn't find the answer instead of guessing, and
+suggests rephrasing or naming the document. In that case the language model isn't called at all.
 
 When an answer adds reasoning that goes beyond what the documents state, that part is labelled
 **Interpretation:**, so facts and inference stay separate.
@@ -362,7 +426,9 @@ remain visible. The page tells you when this has happened.
 
 *Admins only.* Choose a time range, for example **Last 7 days**. The page shows:
 
-- **Tiles**: documents, indexed chunks, questions and grounded answers.
+- **Tiles**: documents, indexed chunks, questions and grounded answers. Conversational replies
+  (greetings and the like) are not document answers, so they don't count towards the grounded
+  rate or the answer latency.
 - **Document activity**: uploads and successful indexing per day, plus failures.
 - **Questions per day**, with the "not found" rate.
 - **Retrieval latency** per stage (search, rerank, generation), as p50 and p95.
@@ -455,7 +521,7 @@ names, and the navigation hides pages you can't use.
 | Qdrant | 1.20 | Dense and sparse vectors with permission (ACL) data attached |
 | Redis | 7 | Job queue and rate limiting |
 | Caddy | 2 | TLS, real client IP, the only publicly exposed service |
-| LLM | OpenAI (e.g. `gpt-5-nano`) or Anthropic Claude | Answer generation, comparison, evaluation judging |
+| LLM | OpenAI, Anthropic Claude and Google Gemini (several can be enabled at once) | Answer generation, routing, comparison, evaluation judging |
 
 Embeddings and reranking run **locally on the CPU** with fastembed (ONNX). No document text leaves
 the server for indexing. Only the passages selected for an answer are sent to the LLM provider.
@@ -499,8 +565,16 @@ Additional behaviour:
 
 ## 15. Retrieval and answers
 
-For each question:
+For each message:
 
+0. **Route** (`app/rag/routing.py`). Unmistakable greetings, thanks and goodbyes are recognised by
+   rule, with no model call. Anything else gets one small structured-output call (low reasoning
+   effort) that returns `chat` or `documents` and, for follow-ups, a standalone search query (this
+   replaces the former separate query-rewrite call).
+   - **chat**: the assistant replies using `ASSISTANT_SYSTEM_PROMPT` with no document access, no
+     search and no citations. The reply never states facts about the organization.
+   - **documents**: steps 1-5 below.
+   - If the routing call fails, or the model is unsure, the message is treated as `documents`.
 1. **Retrieve.** One Qdrant query combines dense and BM25 search (up to 40 candidates each), fused
    with Reciprocal Rank Fusion. The permission filter (organization, `searchable`, ACL tokens,
    optional scope) is built from the authenticated user on the server, never from request input.
@@ -518,12 +592,25 @@ For each question:
      citations point at exact passages.
 
    Either way, the answer streams over Server-Sent Events. The stream sends these events in order:
-   `meta`, `status`, `sources`, `token`, `citation`, `done` (or `error`).
+   `meta`, `status` (`thinking`, then `retrieving` for document questions, then `generating`),
+   `sources`, `token`, `citation`, `done` (or `error`). `done` carries `route` (`chat` or
+   `documents`), and each stored message records its route.
 5. **Validate citations.** Each citation is checked against the chunk it references. Invalid ones
    are dropped and counted.
 
 Retrieved text is treated as data, never as instructions: the model has no tools, and flagged
 chunks are marked as suspicious in the prompt.
+
+**Prompts** (`app/rag/generation/prompts.py`, `PROMPT_VERSION` is recorded with every evaluation
+run):
+
+- `ASSISTANT_SYSTEM_PROMPT`: the personality (warm, brief, natural, in the user's language), what
+  DocuMind can and cannot do, and the honesty rules. It is the voice of every reply.
+- `ANSWER_SYSTEM_PROMPT` / `MARKER_ANSWER_SYSTEM_PROMPT`: the same persona plus the rules for
+  answering from excerpts (cite, say so when the documents don't cover it, keep
+  **Interpretation:** apart from facts). Native citations for Claude, `[n]` markers for OpenAI.
+- `ROUTER_SYSTEM_PROMPT`: the chat-or-documents decision and the query rewrite.
+- `JUDGE_SYSTEM_PROMPT` (`app/rag/evaluation/judge.py`, `JUDGE_VERSION`): the evaluation rubric.
 
 Measured retrieval quality on the built-in benchmark (12 paraphrased questions, real models):
 hybrid search with reranking reaches MRR 0.96 and NDCG@5 0.97.
@@ -547,7 +634,7 @@ hybrid search with reranking reaches MRR 0.96 and NDCG@5 0.97.
 | | MRR | How high the first relevant chunk ranks (1.0 = first) |
 | | NDCG@5 | Ranking quality of the top 5 |
 | | Document recall | Share of the relevant documents that were retrieved |
-| Answer (LLM judge, rubric `judge-v1`) | Faithfulness | Claims supported by the cited sources |
+| Answer (LLM judge, rubric `judge-v2`) | Faithfulness | Claims supported by the cited sources |
 | | Hallucination rate | Share of unsupported claims |
 | | Answer relevance | Whether the answer addresses the question |
 | | Context relevance | Whether the retrieved passages fit the question |
@@ -558,6 +645,9 @@ hybrid search with reranking reaches MRR 0.96 and NDCG@5 0.97.
 
 How metrics are computed:
 
+- The rubric (`JUDGE_SYSTEM_PROMPT`) ignores friendly wording, offers of help and citation markers,
+  counts only statements of fact about the documents as claims, and defines each 1-5 score. Evaluation
+  runs test the document-answer path; routing is covered by its own tests.
 - The judge uses `LLM_MODEL`, unless `EVAL_JUDGE_MODEL` names a different model from the same
   provider. A stronger judge model reduces self-preference bias.
 - Relevance labels come from the evidence quotes, which are resolved against the chunks of the
@@ -601,7 +691,7 @@ How metrics are computed:
 
 **Rate limits (per minute)**
 - Login and register: 10 per IP, and 10 per target account.
-- Token refresh: 60. Uploads: 20. Chat: 20. Search: 60. Everything else: 300.
+- Token refresh: 60. Uploads: 60 (one file per request). Chat: 20. Search: 60. Everything else: 300.
 
 **Headers**
 - Content-Security-Policy with no third-party origins.
@@ -677,7 +767,7 @@ no defaults.
 | `DATABASE_URL` | `postgresql+asyncpg://…` |
 | `JWT_SECRET_KEY` | At least 32 random characters |
 | `QDRANT_API_KEY` | Required in production |
-| `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | Needed for chat, comparison and evaluation. Upload and search work without one |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` | At least one is needed for chat, comparison and evaluation; set several to offer several providers' models in chat. Upload and search work without any |
 
 **General**
 
@@ -700,6 +790,7 @@ no defaults.
 | `COOKIE_SECURE` | `true` |
 | `LOGIN_MAX_FAILED_ATTEMPTS` | 5 |
 | `LOGIN_LOCKOUT_MINUTES` | 15 |
+| `REGISTRATION_ENABLED` | `true`. Set `false` to close public sign-up (nobody can create a workspace); create admins with `python -m app.cli create-admin`. The sign-in page then hides its "create a workspace" link |
 | `PASSWORD_MIN_LENGTH` | 10 |
 
 **Uploads**
@@ -747,8 +838,11 @@ new index. Re-index afterwards.
 
 | Variable | Default |
 |---|---|
-| `LLM_PROVIDER` | `anthropic` (or `openai`) |
-| `LLM_MODEL` | `claude-opus-5-5` (this installation uses `gpt-5-nano`) |
+| `LLM_PROVIDER` | `anthropic` (or `openai`, `google`): the provider of the default model |
+| `LLM_MODEL` | `claude-opus-5-5` (this installation uses `gpt-5-nano`): the default model |
+| `LLM_CATALOG_FILE` | Unset (built-in `app/rag/generation/models.json`). Your own copy adds models or updates prices; a broken file stops the API at start-up |
+| `CHAT_MODEL_IDS` | Unset (every catalog model with a key is selectable). A comma-separated list limits what users can pick, e.g. `gpt-5-nano,gpt-5-mini` for a public demo |
+| `LLM_ROUTER_MODEL` | Unset (routing uses the default model). A cheap, fast model here keeps routing cheap when users pick an expensive one |
 | `LLM_EFFORT` | `medium` |
 | `LLM_MAX_TOKENS` | 8000 |
 | `LLM_TIMEOUT_SECONDS` | 120 |
@@ -763,7 +857,7 @@ new index. Re-index afterwards.
 | `RATE_LIMIT_AUTH_PER_MINUTE` | 10 |
 | `RATE_LIMIT_LOGIN_PER_ACCOUNT_PER_MINUTE` | 10 |
 | `RATE_LIMIT_REFRESH_PER_MINUTE` | 60 |
-| `RATE_LIMIT_UPLOAD_PER_MINUTE` | 20 |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | 60 |
 | `RATE_LIMIT_CHAT_PER_MINUTE` | 20 |
 | `RATE_LIMIT_SEARCH_PER_MINUTE` | 60 |
 | `RATE_LIMIT_DEFAULT_PER_MINUTE` | 300 |
@@ -797,6 +891,10 @@ python -m app.cli reindex --stale     # documents not on the active embedding co
 python -m app.cli reindex --failed    # retry failed documents
 python -m app.cli reindex --all       # everything (e.g. after a parser improvement)
 
+# Create an organization and its admin. Works while sign-up is closed; prompts for the password
+# (or set DOCUMIND_ADMIN_PASSWORD for scripts)
+python -m app.cli create-admin --email you@example.com --name "Your Name" --organization "Acme"
+
 # Run an evaluation dataset; exits 1 on a regression (for CI)
 python -m app.cli evaluate --dataset <uuid> \
     --fail-under retrieval.ndcg@5=0.7 --fail-under answer.faithfulness=0.9 \
@@ -820,13 +918,13 @@ The `request_id` matches the `X-Request-ID` response header and the server logs.
 
 | Area | Endpoints |
 |---|---|
-| Auth | `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/change-password`; `GET /auth/me` |
+| Auth | `GET /auth/config` (public: is sign-up open?); `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/change-password`; `GET /auth/me` |
 | Organization | `GET`/`PATCH /organization`; `GET /organization/members` |
 | Users (admin) | `GET`/`POST /users`; `GET`/`PATCH`/`DELETE /users/{id}` |
 | Groups | `GET`/`POST /groups`; `GET`/`PATCH`/`DELETE /groups/{id}`; `PUT /groups/{id}/members` |
 | Categories | `GET`/`POST /categories`; `PATCH`/`DELETE /categories/{id}` |
 | Documents | `POST /documents/upload`; `GET /documents`; `GET`/`PATCH`/`DELETE /documents/{id}`; `POST …/reprocess`; `GET …/jobs`, `…/download`, `…/preview`, `…/chunks`; `GET`/`PUT …/permissions` |
-| Chat | `GET`/`POST /chat/conversations`; `GET`/`PATCH`/`DELETE /chat/conversations/{id}`; `POST …/{id}/messages` (SSE with `Accept: text/event-stream`, otherwise JSON) |
+| Chat | `GET /chat/models` (models, prices, availability); `GET`/`POST /chat/conversations`; `GET`/`PATCH`/`DELETE /chat/conversations/{id}`; `POST …/{id}/messages` (SSE with `Accept: text/event-stream`, otherwise JSON; body: `content`, optional `model`, optional `edit_message_id`). Messages carry `model`, `usage` (tokens, `cost_usd`, per-step breakdown), `latency_ms` and `edit_of` |
 | Search | `POST /search/hybrid`, `/search/semantic`, `/search/documents` |
 | Comparisons | `POST`/`GET /comparisons`; `GET /comparisons/{id}` |
 | Evaluations | `GET`/`POST /evaluations/datasets`; `DELETE …/{id}`; `GET`/`POST …/{id}/cases`; `DELETE …/cases/{case_id}`; `POST /evaluations/run`; `GET /evaluations/results`, `…/results/{id}`, `/evaluations/metrics` |
@@ -860,6 +958,9 @@ curl -N $API/chat/conversations/$CONV/messages -H "Authorization: Bearer $TOKEN"
 | The first upload takes several minutes | The worker is downloading its models (only once) |
 | Status **failed** | Read the reason on the document's **Details** tab. Encrypted or scanned PDFs need to be fixed at the source; for transient errors, use **Reprocess** |
 | Chat says it couldn't find the answer | No indexed document you can see is relevant enough. Check the document is *indexed* and shared with you, or rephrase the question |
+| A model is greyed out or a reply ends with a limit message | The provider refused the request because the API key's quota, spend limit or credit is used up (the message says when access returns, if the provider tells us). Pick another model, or raise the limit with the provider. A Google key on the free tier cannot use Gemini Pro-tier models at all |
+| *cost n/a* under a reply | The model is not in the catalog (or has no price there). Add it to `models.json` or `LLM_CATALOG_FILE` |
+| A reply has no citations | Not every message needs the documents: greetings, thanks and general questions are answered without a search. A *document* question without citations shows **Not backed by document citations** |
 | Chat errors with "Answer generation is not configured" (`llm_not_configured`) | Set `LLM_PROVIDER`, `LLM_MODEL` and the matching API key, then restart the API and worker |
 | `/ready` fails, or Qdrant returns 401 | Qdrant is down, or `QDRANT_API_KEY` differs between Qdrant and the app. Restart Qdrant with `start-qdrant.ps1` |
 | "Too many requests" (429) | A rate limit was reached. Wait a minute |
@@ -883,3 +984,5 @@ curl -N $API/chat/conversations/$CONV/messages -H "Authorization: Bearer $TOKEN"
 | **ACL token** | A permission marker stored with each vector so search can filter by access |
 | **Embedding configuration** | The combination of embedding model and chunking settings; each one has its own index |
 | **Stale document** | A document indexed under an older embedding configuration |
+| **Token** | The unit models read and write (roughly three quarters of a word); providers bill per million tokens, separately for input and output |
+| **Superseded message** | A message hidden after the user edited an earlier one; kept in the database, never shown or sent to the model |

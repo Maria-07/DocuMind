@@ -42,3 +42,16 @@ export function initials(name: string): string {
       .join("") || "?"
   );
 }
+
+/** Estimated cost: tiny amounts keep 4 decimals so a $0.0004 reply doesn't read as $0.00. */
+export function formatUsd(value: number): string {
+  if (value === 0) return "$0";
+  if (value < 0.0001) return "<$0.0001";
+  if (value < 0.01) return "$" + value.toFixed(4);
+  if (value < 1) return "$" + value.toFixed(3);
+  return "$" + value.toFixed(2);
+}
+
+export function formatCount(n: number): string {
+  return n.toLocaleString("en-US");
+}

@@ -20,7 +20,8 @@ _SNIPPET_CHARS = 500
 
 NO_ANSWER_TEXT = (
     "I couldn't find information about this in the documents you have access to. "
-    "Try rephrasing the question, or check that the relevant document has been uploaded and indexed."
+    "Could you try rephrasing the question, or tell me which document it should be in? "
+    "If it was uploaded recently, it may still be indexing."
 )
 REFUSAL_TEXT = "I can't help with this request."
 

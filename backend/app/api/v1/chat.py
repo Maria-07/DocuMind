@@ -10,6 +10,7 @@ from app.api.deps import ChatServiceDep, CurrentPrincipal, rate_limit_by_user
 from app.api.sse import sse_response
 from app.schemas.chat import (
     AnswerResponse,
+    ChatModelsResponse,
     CitationRead,
     ConversationCreate,
     ConversationDetail,
@@ -22,6 +23,11 @@ from app.schemas.chat import (
 from app.schemas.common import ERROR_RESPONSES, Page, PageParams
 
 router = APIRouter(prefix="/chat", tags=["chat"], responses=ERROR_RESPONSES)
+
+
+@router.get("/models", response_model=ChatModelsResponse, summary="Models the caller can pick, with prices")
+async def list_models(principal: CurrentPrincipal, service: ChatServiceDep) -> ChatModelsResponse:
+    return service.list_models()
 
 
 @router.post("/conversations", response_model=ConversationRead, status_code=status.HTTP_201_CREATED)
@@ -70,10 +76,11 @@ async def delete_conversation(
     dependencies=[Depends(rate_limit_by_user("chat", "rate_limit_chat_per_minute"))],
     summary="Ask a question; streams Server-Sent Events when Accept: text/event-stream",
     description=(
-        "SSE events: `meta` (ids) · `status` (retrieving|generating) · `sources` (retrieved chunks) · "
-        "`token` (answer text, including [n] citation markers) · `citation` (a newly cited source) · "
-        "`done` (final citations, grounded flag, usage) · `error`. Without the SSE Accept header the "
-        "complete answer is returned as JSON."
+        "SSE events: `meta` (ids, model) · `status` (thinking|retrieving|generating) · `sources` (retrieved "
+        "chunks) · `token` (answer text, including [n] citation markers) · `citation` (a newly cited source) · "
+        "`done` (final citations, grounded flag, route, model, usage incl. estimated cost) · `error`. Set `model` "
+        "to choose a model from GET /chat/models; set `edit_message_id` to edit and resubmit an earlier message. "
+        "Without the SSE Accept header the complete answer is returned as JSON."
     ),
     responses={200: {"content": {"text/event-stream": {}}}},
 )
@@ -85,7 +92,12 @@ async def send_message(
     service: ChatServiceDep,
 ) -> StreamingResponse | AnswerResponse:
     ask = await service.prepare_ask(
-        principal, conversation_id, data.content, data.scope.as_dict() if data.scope is not None else None
+        principal,
+        conversation_id,
+        data.content,
+        data.scope.as_dict() if data.scope is not None else None,
+        model_id=data.model,
+        edit_message_id=data.edit_message_id,
     )
     if "text/event-stream" in request.headers.get("accept", ""):
         return sse_response(service.stream_answer(ask))

@@ -13,7 +13,14 @@ from app.api.deps import (
 )
 from app.core.config import Settings
 from app.repositories.users import OrganizationRepository, UserRepository
-from app.schemas.auth import ChangePasswordRequest, LoginRequest, MeResponse, RegisterRequest, TokenResponse
+from app.schemas.auth import (
+    AuthConfig,
+    ChangePasswordRequest,
+    LoginRequest,
+    MeResponse,
+    RegisterRequest,
+    TokenResponse,
+)
 from app.schemas.common import ERROR_RESPONSES
 from app.schemas.organization import OrganizationRead
 from app.schemas.user import UserRead
@@ -61,6 +68,11 @@ def _token_response(issued: IssuedTokens) -> TokenResponse:
     return TokenResponse(
         access_token=issued.access_token, expires_in=issued.expires_in, user=UserRead.model_validate(issued.user)
     )
+
+
+@router.get("/config", response_model=AuthConfig, summary="Public sign-in settings (no authentication)")
+async def auth_config(settings: SettingsDep) -> AuthConfig:
+    return AuthConfig(registration_enabled=settings.registration_enabled)
 
 
 @router.post(

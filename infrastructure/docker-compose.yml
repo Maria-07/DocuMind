@@ -53,6 +53,7 @@ services:
       context: ../frontend
       args:
         API_URL: http://backend:8000
+        MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50}
     restart: unless-stopped
     depends_on:
       backend:

@@ -43,6 +43,14 @@ class Message(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # True when the answer is grounded in retrieved documents (has at least one valid citation).
     grounded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     search_query: Mapped[str | None] = mapped_column(Text)  # standalone query used for retrieval
+    # How the assistant handled the message: "chat" (no documents needed) or "documents" (retrieval +
+    # citations). NULL = created before routing existed, i.e. always a document answer.
+    route: Mapped[str | None] = mapped_column(String(16))
+    # Set when the user edited an earlier message and resubmitted: this message no longer belongs to the live
+    # conversation (it is hidden from history and context) but is kept for the record.
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # On a user message that replaced an edited one: the id of the message it replaces (no FK: it may be old).
+    edit_of: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     model: Mapped[str | None] = mapped_column(String(100))
     usage: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")

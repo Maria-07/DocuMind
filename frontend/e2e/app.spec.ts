@@ -75,8 +75,8 @@ test("register, upload, index, ask, cite, navigate", async ({ page }) => {
   // --- Chat: streamed, grounded answer with clickable citations ---------------------------
   await nav(page, "AI Chat");
   await expect(page.getByRole("heading", { name: "Ask your documents" })).toBeVisible();
-  await page.getByLabel("Message").fill("How often must passwords be changed?");
-  await page.getByLabel("Message").press("Enter");
+  await page.getByLabel("Message", { exact: true }).fill("How often must passwords be changed?");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
   await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
   const chip = page.getByRole("link", { name: /^Source 1:/ }).first();
   await expect(chip).toBeVisible({ timeout: 120_000 });
@@ -249,7 +249,7 @@ test("mobile layout: collapsible navigation, usable pages", async ({ page }) => 
   const box = await filters.boundingBox();
   expect(box && box.x + box.width).toBeLessThanOrEqual(390); // fully on screen
   await page.goto("/chat");
-  await expect(page.getByLabel("Message")).toBeVisible();
+  await expect(page.getByLabel("Message", { exact: true })).toBeVisible();
   // No horizontal overflow on a phone.
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
@@ -275,4 +275,88 @@ test("PDF upload and in-app preview work under the CSP", async ({ page }) => {
   await expect(frame).toHaveAttribute("src", /^blob:/);
   await page.waitForTimeout(1500); // let the viewer load; a CSP block would be logged by now
   await shot(page, "19-pdf-preview");
+});
+
+async function waitForReplies(page: Page, count: number) {
+  await expect(page.getByTestId("assistant-message")).toHaveCount(count, { timeout: 60_000 });
+  await expect(page.getByText("Thinking…")).toHaveCount(0, { timeout: 120_000 });
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, { timeout: 120_000 });
+}
+
+test("small talk gets a friendly reply: no citations, no warnings; document questions still cite", async ({ page }) => {
+  await login(page, admin.email);
+  await nav(page, "AI Chat");
+  await expect(page.getByRole("heading", { name: "Ask your documents" })).toBeVisible();
+  await page.getByLabel("Message", { exact: true }).fill("Hello!");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
+  await waitForReplies(page, 1);
+
+  const replies = page.getByTestId("assistant-message");
+  const greeting = await replies.last().innerText();
+  expect(greeting.length).toBeGreaterThan(5);
+  expect(greeting.length).toBeLessThan(800); // a greeting gets a short reply, not a document dump
+  await expect(replies.last().getByRole("link")).toHaveCount(0); // no citations
+  await expect(page.getByText("Not backed by document citations")).toHaveCount(0);
+  await shot(page, "20-chat-greeting");
+
+  await page.getByLabel("Message", { exact: true }).fill("Thanks!");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await waitForReplies(page, 2);
+  await expect(replies.last().getByRole("link")).toHaveCount(0);
+  await expect(page.getByText("Not backed by document citations")).toHaveCount(0);
+
+  // A real question in the same conversation is still answered from the documents, with citations.
+  await page.getByLabel("Message", { exact: true }).fill("How often must passwords be changed?");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page.getByRole("link", { name: /^Source 1:/ }).first()).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText(/90 days/).first()).toBeVisible();
+  await shot(page, "21-chat-greeting-then-answer");
+});
+
+test("pick a model, see what a reply costs, edit a message and resubmit it", async ({ page }) => {
+  await login(page, admin.email);
+  await nav(page, "AI Chat");
+  await expect(page.getByRole("heading", { name: "Ask your documents" })).toBeVisible();
+
+  // The model picker lists the configured models; choose a non-default one.
+  const picker = page.getByTestId("model-picker");
+  await expect(picker).toBeVisible();
+  await picker.click();
+  await page.getByRole("option", { name: /GPT-5 mini/ }).click();
+  await expect(picker).toContainText("GPT-5 mini");
+
+  const message = page.getByLabel("Message", { exact: true });
+  await message.fill("How often must passwords be changed?");
+  await message.press("Enter");
+  await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
+  await waitForReplies(page, 1);
+
+  // The reply says which model answered and what it cost (an estimate), and the header totals the conversation.
+  const usage = page.getByTestId("usage-line");
+  await expect(usage).toHaveCount(1);
+  await expect(usage.first()).toContainText("GPT-5 mini");
+  await expect(page.getByTestId("usage-cost").first()).toHaveText(/^(<)?\$\d/);
+  await expect(page.getByTestId("conversation-cost")).toContainText("tokens");
+  await shot(page, "22-model-and-cost");
+
+  // Edit the message, ask again with a different model: the old reply is replaced.
+  await page.getByTestId("user-message").first().hover();
+  await page.getByRole("button", { name: "Edit message" }).first().click();
+  await page.getByLabel("Edit your message").fill("How long must passwords be at minimum?");
+  await picker.click();
+  await page.getByRole("option", { name: /GPT-5 nano/ }).click();
+  await page.getByRole("button", { name: "Resubmit" }).click();
+  await waitForReplies(page, 1);
+  await expect(page.getByTestId("user-message")).toHaveCount(1);
+  await expect(page.getByTestId("user-message")).toContainText("minimum");
+  await expect(page.getByText("edited", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("usage-line").first()).toContainText("GPT-5 nano");
+  await expect(page.getByText(/14/).first()).toBeVisible();
+  await shot(page, "23-edited-and-resubmitted");
+
+  // Persisted: the edited state survives a reload.
+  await page.reload();
+  await expect(page.getByTestId("assistant-message")).toHaveCount(1);
+  await expect(page.getByText("edited", { exact: true })).toBeVisible();
 });

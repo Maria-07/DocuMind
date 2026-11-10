@@ -4,6 +4,9 @@
     python -m app.cli reindex --failed    # retry documents whose processing failed
     python -m app.cli reindex --all       # every live document (e.g. after a parser improvement)
 
+    python -m app.cli create-admin --email a@b.c --name "Ada" --organization "Acme"   # prompts for the password
+      (or set DOCUMIND_ADMIN_PASSWORD for scripts)
+
     python -m app.cli evaluate --dataset <id> [--baseline <run-id>] \\
         [--fail-under retrieval.ndcg@5=0.7 --fail-under answer.faithfulness=0.8] [--max-drop 0.05]
 
@@ -17,20 +20,28 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
+import os
 import sys
 import uuid
 
 from arq import create_pool
 from arq.connections import RedisSettings
+from pydantic import ValidationError
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
+from app.core.errors import AppError
 from app.db.session import create_engine, create_sessionmaker
 from app.models import EvalDataset, EvalRun
 from app.rag.evaluation.runner import EvaluationRunner, regressions
 from app.rag.generation import build_judge
 from app.rag.runtime import build_rag_runtime
+from app.schemas.auth import RegisterRequest
+from app.services.audit import RequestMeta
+from app.services.auth import AuthService
 from app.services.embeddings import queue_reindex
 from app.services.job_queue import ArqJobQueue
 
@@ -45,6 +56,53 @@ async def reindex(mode: str) -> None:
     finally:
         await pool.aclose()
         await engine.dispose()
+
+
+async def create_admin(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    email: str,
+    name: str,
+    organization: str,
+    password: str,
+) -> int:
+    """Create an organization with its first admin. Works while public sign-up is closed."""
+    try:
+        data = RegisterRequest(email=email, password=password, full_name=name, organization_name=organization)
+        async with sessionmaker() as s:
+            await AuthService(s, settings).create_workspace(data, RequestMeta(ip=None, user_agent="cli"))
+    except ValidationError as exc:
+        print(f"Invalid input: {exc.errors()[0]['loc'][-1]}: {exc.errors()[0]['msg']}", file=sys.stderr)
+        return 2
+    except AppError as exc:
+        problems = (exc.details or {}).get("problems")
+        print(exc.message + (f": {'; '.join(problems)}" if problems else ""), file=sys.stderr)
+        return 2
+    print(f"Created organization {organization!r} with admin {email.lower()}")
+    return 0
+
+
+async def _create_admin_cli(email: str, name: str, organization: str, password: str) -> int:
+    settings = get_settings()
+    engine = create_engine(settings, null_pool=True)
+    try:
+        return await create_admin(
+            create_sessionmaker(engine), settings, email=email, name=name, organization=organization, password=password
+        )
+    finally:
+        await engine.dispose()
+
+
+def _password_from_env_or_prompt() -> str:
+    password = os.environ.get("DOCUMIND_ADMIN_PASSWORD")
+    if password:
+        return password
+    password = getpass.getpass("Password: ")
+    if password != getpass.getpass("Repeat password: "):
+        print("The passwords do not match", file=sys.stderr)
+        sys.exit(2)
+    return password
 
 
 async def evaluate(dataset_id: uuid.UUID, baseline: uuid.UUID | None, floors: dict[str, float], max_drop: float) -> int:
@@ -128,6 +186,10 @@ def main() -> None:
     group.add_argument("--stale", action="store_const", const="stale", dest="mode")
     group.add_argument("--all", action="store_const", const="all", dest="mode")
     group.add_argument("--failed", action="store_const", const="failed", dest="mode")
+    admin_cmd = sub.add_parser("create-admin", help="Create an organization and its admin (works with sign-up closed)")
+    admin_cmd.add_argument("--email", required=True)
+    admin_cmd.add_argument("--name", required=True, help="the admin's full name")
+    admin_cmd.add_argument("--organization", required=True)
     eval_cmd = sub.add_parser("evaluate", help="Run an evaluation dataset and gate on metrics")
     eval_cmd.add_argument("--dataset", required=True, type=uuid.UUID)
     eval_cmd.add_argument("--baseline", type=uuid.UUID)
@@ -136,6 +198,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "reindex":
         asyncio.run(reindex(args.mode))
+    elif args.command == "create-admin":
+        password = _password_from_env_or_prompt()
+        sys.exit(asyncio.run(_create_admin_cli(args.email, args.name, args.organization, password)))
     else:
         sys.exit(asyncio.run(evaluate(args.dataset, args.baseline, dict(args.fail_under), args.max_drop)))
 

@@ -215,10 +215,12 @@ async def test_analytics_and_embeddings(
     await _ask(admin, conv, "How often must passwords be rotated?")
     # A separate conversation: as a follow-up it would be condensed with the first question.
     await _ask(admin, await _new_conversation(admin), "Quantum chromodynamics lattice gauge theory")
+    # Greetings are conversational replies: they must not count as ungrounded document answers.
+    await _ask(admin, await _new_conversation(admin), "Hello!")
 
     overview = (await client.get("/api/v1/analytics/overview", headers=admin.headers)).json()
     assert overview["documents_total"] == 2 and overview["documents_by_status"]["indexed"] == 2
-    assert overview["chunks_total"] > 0 and overview["conversations_total"] == 2 and overview["questions_7d"] == 2
+    assert overview["chunks_total"] > 0 and overview["conversations_total"] == 3 and overview["questions_7d"] == 2
     assert overview["grounded_rate_7d"] == 0.5 and overview["storage_bytes"] > 0
 
     docs = (await client.get("/api/v1/analytics/documents?days=7", headers=admin.headers)).json()

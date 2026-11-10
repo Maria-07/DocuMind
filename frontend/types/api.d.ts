@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public sign-in settings (no authentication) */
+        get: operations["auth_config_api_v1_auth_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/register": {
         parameters: {
             query?: never;
@@ -515,6 +532,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Models the caller can pick, with prices */
+        get: operations["list_models_api_v1_chat_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/chat/conversations": {
         parameters: {
             query?: never;
@@ -563,7 +597,7 @@ export interface paths {
         put?: never;
         /**
          * Ask a question; streams Server-Sent Events when Accept: text/event-stream
-         * @description SSE events: `meta` (ids) · `status` (retrieving|generating) · `sources` (retrieved chunks) · `token` (answer text, including [n] citation markers) · `citation` (a newly cited source) · `done` (final citations, grounded flag, usage) · `error`. Without the SSE Accept header the complete answer is returned as JSON.
+         * @description SSE events: `meta` (ids, model) · `status` (thinking|retrieving|generating) · `sources` (retrieved chunks) · `token` (answer text, including [n] citation markers) · `citation` (a newly cited source) · `done` (final citations, grounded flag, route, model, usage incl. estimated cost) · `error`. Set `model` to choose a model from GET /chat/models; set `edit_message_id` to edit and resubmit an earlier message. Without the SSE Accept header the complete answer is returned as JSON.
          */
         post: operations["send_message_api_v1_chat_conversations__conversation_id__messages_post"];
         delete?: never;
@@ -848,6 +882,14 @@ export interface components {
             /** Sources */
             sources: components["schemas"]["SourceRead"][];
         };
+        /**
+         * AuthConfig
+         * @description Public settings the sign-in pages need before anyone is signed in.
+         */
+        AuthConfig: {
+            /** Registration Enabled */
+            registration_enabled: boolean;
+        };
         /** Body_upload_documents_api_v1_documents_upload_post */
         Body_upload_documents_api_v1_documents_upload_post: {
             /**
@@ -896,6 +938,36 @@ export interface components {
             current_password: string;
             /** New Password */
             new_password: string;
+        };
+        /** ChatModelRead */
+        ChatModelRead: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Is Default */
+            is_default: boolean;
+            /**
+             * Unavailable Reason
+             * @description Set while the model's quota or usage limit is exhausted (shown greyed out)
+             */
+            unavailable_reason?: string | null;
+            /** @description Null when the price is unknown (no cost shown) */
+            price?: components["schemas"]["ModelPriceRead"] | null;
+        };
+        /** ChatModelsResponse */
+        ChatModelsResponse: {
+            /** Default */
+            default: string | null;
+            /** Models */
+            models: components["schemas"]["ChatModelRead"][];
         };
         /** ChunkPage */
         ChunkPage: {
@@ -1619,6 +1691,16 @@ export interface components {
             content: string;
             /** @description Overrides the conversation scope for this message */
             scope?: components["schemas"]["Scope"] | null;
+            /**
+             * Model
+             * @description Model id from GET /chat/models. Omit for the default model.
+             */
+            model?: string | null;
+            /**
+             * Edit Message Id
+             * @description Edit and resubmit: the id of one of your earlier messages in this conversation. That message and everything after it are hidden from the conversation (kept for the record) and this message takes its place.
+             */
+            edit_message_id?: string | null;
         };
         /** MessageRead */
         MessageRead: {
@@ -1643,6 +1725,25 @@ export interface components {
             /** Model */
             model?: string | null;
             /**
+             * Route
+             * @description "chat" (no documents needed) or "documents"
+             */
+            route?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /**
+             * Usage
+             * @description Token usage and estimated cost of this reply: input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, cost_usd (null when the model's price is unknown) and a per-step breakdown (routing, answer).
+             */
+            usage?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Edit Of
+             * @description On a user message: the earlier message it replaced when the user edited it
+             */
+            edit_of?: string | null;
+            /**
              * Citations
              * @default []
              */
@@ -1665,6 +1766,18 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * ModelPriceRead
+         * @description USD per 1M tokens, in force today.
+         */
+        ModelPriceRead: {
+            /** Input */
+            input: number;
+            /** Output */
+            output: number;
+            /** Cached Input */
+            cached_input?: number | null;
         };
         /** OrganizationRead */
         OrganizationRead: {
@@ -2039,6 +2152,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    auth_config_api_v1_auth_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthConfig"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -4641,6 +4819,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentSearchResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_models_api_v1_chat_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
                 };
             };
             /** @description Not authenticated */

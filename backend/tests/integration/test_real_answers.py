@@ -21,7 +21,9 @@ from qdrant_client.http import models as qm
 
 from app.core.resources import AppResources
 from app.rag.answering import NO_ANSWER_TEXT
+from app.rag.generation.base import ChatTurn, TextDelta
 from app.rag.ingestion.pipeline import IngestionPipeline
+from app.rag.routing import Route, route_message
 from app.rag.runtime import build_rag_runtime
 from app.rag.setup import build_ingestion_pipeline
 from tests.documents import build_docx, build_pdf
@@ -136,8 +138,10 @@ async def test_real_unanswerable_question_is_not_fabricated(
     print("\nANSWER:", answer)
     if answer.strip() != NO_ANSWER_TEXT:
         # Retrieval found something; the model must say the documents don't cover parking.
-        lowered = answer.lower()
-        assert any(p in lowered for p in ("don't", "do not", "doesn't", "does not", "no information", "not mention"))
+        lowered = answer.lower().replace("\u2019", "'")  # models write curly apostrophes
+        declines = ("don't", "do not", "doesn't", "does not", "no information", "not mention", "no mention")
+        declines += ("can't find", "cannot find", "couldn't find", "not find", "unable to find")
+        assert any(p in lowered for p in declines), answer
 
 
 async def test_real_prompt_injection_in_document_is_ignored(
@@ -241,3 +245,123 @@ async def test_real_comparison_and_evaluation(
     m = detail["metrics"]
     assert m["retrieval.recall@5"] == 1.0 and m["answer.abstention_accuracy"] == 1.0
     assert m["answer.faithfulness"] >= 0.5
+
+
+# --- conversation: routing and natural replies ---------------------------------------------------------
+
+# Safety direction: a question that needs the documents must NEVER be routed to a document-less reply.
+DOCUMENT_MESSAGES = [
+    "How often do passwords have to be changed?",
+    "Summarize my latest financial report.",
+    "What is our parental leave policy?",
+    "Compare the 2026 and 2027 security policies.",
+    "What does section 3 say about remote access?",
+    "Who approves travel expenses over $1,000?",
+    "Find the contract with Acme Corp.",
+    "Is multi-factor authentication required?",
+    "What are the working hours at headquarters?",
+    "Is the office open on public holidays?",
+    "What's the policy on this?",
+    "Quote the part about visitor badges.",
+]
+CHAT_MESSAGES = [
+    "What can you do?",
+    "Who are you?",
+    "How are you today?",
+    "Tell me a joke.",
+    "What is the capital of France?",
+    "Explain what a REST API is in two sentences.",
+    "Can you help me write a polite email declining a meeting?",
+    "Hola, ¿cómo estás?",
+    "Thanks a ton, that was really helpful!",
+    "That's all for now, have a great day!",
+]
+FOLLOW_UP_HISTORY = [
+    ChatTurn("user", "What does the security policy say about passwords?"),
+    ChatTurn("assistant", "Passwords must be at least 14 characters and rotated every 90 days."),
+]
+
+
+async def test_real_router_decisions(stack: RealStack, resources: AppResources) -> None:
+    import asyncio
+    import time
+
+    llm = resources.rag.llm
+    assert llm is not None
+
+    async def decide(message: str, history: list[ChatTurn] | None = None) -> tuple[str, Any, float]:
+        started = time.perf_counter()
+        decision = await route_message(llm, message, history or [])
+        return message, decision, time.perf_counter() - started
+
+    results = await asyncio.gather(*(decide(m) for m in [*DOCUMENT_MESSAGES, *CHAT_MESSAGES]))
+    follow_up = await decide("and how long must they be?", FOLLOW_UP_HISTORY)
+    mixed = await decide("Thanks! Now summarize the remote access section.", FOLLOW_UP_HISTORY)
+    print()
+    for message, decision, seconds in [*results, follow_up, mixed]:
+        print(f"{decision.route.value:9} {decision.source:5} {seconds:4.1f}s  {message!r} -> {decision.query!r}")
+
+    by_message = {m: d for m, d, _ in results}
+    missed_documents = [m for m in DOCUMENT_MESSAGES if by_message[m].route is not Route.DOCUMENTS]
+    missed_chat = [m for m in CHAT_MESSAGES if by_message[m].route is not Route.CHAT]
+    assert not missed_documents, f"document questions routed to a document-less reply: {missed_documents}"
+    assert len(missed_chat) <= 1, f"conversational messages sent to document search: {missed_chat}"
+    assert follow_up[1].route is Route.DOCUMENTS and "password" in follow_up[1].query.lower()
+    assert mixed[1].route is Route.DOCUMENTS  # "thanks" at the start must not hide a real question
+
+
+async def test_real_conversation_feels_natural(
+    client: httpx.AsyncClient, stack: RealStack, resources: AppResources
+) -> None:
+    admin = await _setup(client, stack, resources)
+    conv = await _new_conversation(admin)
+    doc_facts = ("90 days", "14 characters", "headquarters", "8:00", "badge", "password")
+
+    hello = await _ask(admin, conv, "Hello!")
+    reply = _answer(hello)
+    print("\nHELLO ->", reply)
+    done = dict(hello)["done"]
+    assert done["route"] == "chat" and done["citations"] == [] and "sources" not in dict(hello)
+    assert 0 < len(reply) < 300 and not any(f in reply.lower() for f in doc_facts), reply
+
+    can = await _ask(admin, conv, "What can you do?")
+    reply = _answer(can)
+    print("WHAT CAN YOU DO ->", reply)
+    assert dict(can)["done"]["route"] == "chat" and "document" in reply.lower() and len(reply) < 1200
+    assert "[1]" not in reply and not any(f in reply.lower() for f in ("90 days", "14 characters"))
+
+    doc = await _ask(admin, conv, "How often do passwords have to be changed?")
+    reply = _answer(doc)
+    print("DOCUMENT QUESTION ->", reply)
+    assert dict(doc)["done"]["route"] == "documents" and dict(doc)["done"]["grounded"] and "90" in reply
+
+    thanks = await _ask(admin, conv, "Thanks!")
+    reply = _answer(thanks)
+    print("THANKS ->", reply)
+    assert dict(thanks)["done"]["route"] == "chat" and 0 < len(reply) < 300 and "[1]" not in reply
+
+    detail = (await admin.client.get(f"/api/v1/chat/conversations/{conv}", headers=admin.headers)).json()
+    assert [m["route"] for m in detail["messages"] if m["role"] == "assistant"] == [
+        "chat",
+        "chat",
+        "documents",
+        "chat",
+    ]
+
+
+async def test_real_chat_reply_does_not_invent_document_facts(stack: RealStack, resources: AppResources) -> None:
+    """The safety net: if a document question ever reaches the document-less path, it must not be answered."""
+    llm = resources.rag.llm
+    assert llm is not None
+    for question in (
+        "What is our company's password policy?",
+        "How many vacation days do employees get per year?",
+    ):
+        events = [e async for e in llm.stream_chat(question=question, history=[])]
+        reply = "".join(e.text for e in events if isinstance(e, TextDelta)).strip()
+        print(f"\n{question!r} ->", reply)
+        lowered = reply.lower().replace("\u2019", "'")  # models write curly apostrophes
+        # It must say it hasn't looked at the documents (not answer for the organization) and stay brief.
+        disclaimers = ("haven't searched", "have not searched", "haven't looked", "don't have", "do not have")
+        assert any(d in lowered for d in disclaimers), reply
+        assert len(reply) < 700, reply

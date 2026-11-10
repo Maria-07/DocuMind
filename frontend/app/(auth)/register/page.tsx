@@ -11,9 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useRegistrationOpen } from "@/lib/auth-config";
 
 export default function RegisterPage() {
   const { register } = useAuth();
+  const registrationOpen = useRegistrationOpen();
   const router = useRouter();
   const [form, setForm] = useState({ full_name: "", email: "", organization_name: "", password: "" });
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +35,20 @@ export default function RegisterPage() {
     } finally {
       setPending(false);
     }
+  }
+
+  if (registrationOpen === false) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Sign-up is closed</h1>
+        <p className="text-sm text-muted-foreground">
+          New workspaces are created by an administrator. If you already have an account, sign in.
+        </p>
+        <Button asChild className="h-10 w-full">
+          <Link href="/login">Sign in</Link>
+        </Button>
+      </div>
+    );
   }
 
   return (

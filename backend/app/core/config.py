@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     qdrant_collection_alias: str = "chunks_active"
 
     # --- Auth ------------------------------------------------------------------------------
+    # Public sign-up creates a whole organization with its own admin. Turn it off for a public demo and
+    # create accounts with `python -m app.cli create-admin` and the admin's User Management page.
+    registration_enabled: bool = True
     jwt_secret_key: SecretStr
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
     jwt_issuer: str = "documind"
@@ -109,10 +112,20 @@ class Settings(BaseSettings):
     context_max_tokens: int = Field(default=6000, ge=500, le=100_000)
 
     # --- Generation (Phase 4) -------------------------------------------------------------
-    llm_provider: Literal["anthropic", "openai"] = "anthropic"
+    llm_provider: Literal["anthropic", "openai", "google"] = "anthropic"
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
+    google_api_key: SecretStr | None = None
+    # The default chat model. Users can pick any other model from the catalog whose provider key is set.
     llm_model: str = "claude-opus-5-5"
+    # Models offered in chat and their prices (default: app/rag/generation/models.json).
+    llm_catalog_file: Path | None = None
+    # Model for the small routing call that runs before each non-trivial message. Unset = the default model.
+    # A cheap, fast model here keeps routing cost and latency low when users pick an expensive one.
+    llm_router_model: str | None = None
+    # Comma-separated model ids users may pick in chat (empty = every catalog model whose provider key is
+    # set). For a public demo, list the cheap ones so a shared login can't run up a large bill.
+    chat_model_ids: str = ""
     # Reasoning effort. "none"/"minimal" are OpenAI-only (mapped to "low" for Claude).
     llm_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] = "medium"
     llm_max_tokens: int = Field(default=8000, ge=256, le=128_000)
@@ -131,7 +144,7 @@ class Settings(BaseSettings):
     rate_limit_auth_per_minute: int = 10  # login / register (brute-force protection)
     rate_limit_login_per_account_per_minute: int = 10  # per target e-mail, independent of the client IP
     rate_limit_refresh_per_minute: int = 60  # token refresh (page loads, token expiry)
-    rate_limit_upload_per_minute: int = 20
+    rate_limit_upload_per_minute: int = 60  # upload requests; the UI sends one file per request
     rate_limit_default_per_minute: int = 300
 
     @field_validator("jwt_secret_key")
@@ -163,16 +176,28 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _llm_model_matches_provider(self) -> Settings:
         model = self.llm_model.lower()
-        if self.llm_provider == "openai" and model.startswith("claude"):
-            raise ValueError("LLM_PROVIDER=openai but LLM_MODEL is a Claude model; set LLM_MODEL (e.g. gpt-5-nano)")
-        if self.llm_provider == "anthropic" and model.startswith(("gpt", "o1", "o3", "o4")):
-            raise ValueError("LLM_PROVIDER=anthropic but LLM_MODEL is an OpenAI model; set LLM_PROVIDER=openai")
+        if self.llm_provider == "openai" and model.startswith(("claude", "gemini")):
+            raise ValueError("LLM_PROVIDER=openai but LLM_MODEL is not an OpenAI model (e.g. gpt-5-nano)")
+        if self.llm_provider == "anthropic" and model.startswith(("gpt", "o1", "o3", "o4", "gemini")):
+            raise ValueError("LLM_PROVIDER=anthropic but LLM_MODEL is not a Claude model; set LLM_PROVIDER to match")
+        if self.llm_provider == "google" and model.startswith(("claude", "gpt", "o1", "o3", "o4")):
+            raise ValueError("LLM_PROVIDER=google but LLM_MODEL is not a Gemini model; set LLM_PROVIDER to match")
         return self
+
+    def provider_configured(self, provider: str) -> bool:
+        """Whether the API key for ``provider`` ("openai" | "anthropic" | "google") is set."""
+        key = {"openai": self.openai_api_key, "anthropic": self.anthropic_api_key, "google": self.google_api_key}.get(
+            provider
+        )
+        return key is not None and bool(key.get_secret_value())
+
+    @property
+    def chat_model_id_list(self) -> list[str]:
+        return [m.strip() for m in self.chat_model_ids.split(",") if m.strip()]
 
     @property
     def llm_configured(self) -> bool:
-        key = self.openai_api_key if self.llm_provider == "openai" else self.anthropic_api_key
-        return key is not None and bool(key.get_secret_value())
+        return self.provider_configured(self.llm_provider)
 
     @property
     def tokenizer_name(self) -> str:

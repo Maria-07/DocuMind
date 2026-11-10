@@ -8,6 +8,14 @@ import type { NextConfig } from "next";
 // in production an edge proxy (Caddy, see infrastructure/) must overwrite it with the real address.
 const apiUrl = (process.env.API_URL ?? "http://127.0.0.1:8010").replace(/\/$/, "");
 
+// On Vercel the default (a local address) would silently proxy every /api call into the void: fail the build instead.
+if (process.env.VERCEL && !process.env.API_URL) {
+  throw new Error(
+    "API_URL is not set. In the Vercel project settings (Environment Variables) set API_URL to the backend's public " +
+      "HTTPS address, for example https://documind-api.duckdns.org, then redeploy.",
+  );
+}
+
 // Production CSP. Next's App Router bootstraps with inline scripts, so script-src needs
 // 'unsafe-inline' unless every response carries a nonce (that would require a proxy.ts, which
 // also caps request bodies — uploads stream through /api). The policy still blocks third-party
@@ -37,7 +45,19 @@ const securityHeaders = [
   ...(process.env.NODE_ENV === "production" ? [{ key: "Content-Security-Policy", value: csp }] : []),
 ];
 
+// The /api rewrite proxy buffers at most `proxyClientMaxBodySize` of a request body (Next's
+// default is 10 MB) and silently truncates the rest, which corrupted every upload above 10 MB.
+// Allow the backend's per-file limit (MAX_UPLOAD_SIZE_MB, read at build time like API_URL) plus
+// multipart overhead; the backend still enforces the real limit.
+const maxUploadMb = Number(process.env.MAX_UPLOAD_SIZE_MB) || 50;
+
 const nextConfig: NextConfig = {
+  experimental: {
+    proxyClientMaxBodySize: `${maxUploadMb + 5}mb`,
+    // Socket timeout of the /api proxy (default 30 s). Large uploads on slow links and long
+    // streamed answers must not be cut off; the backend has its own timeouts.
+    proxyTimeout: 300_000,
+  },
   // Self-contained server bundle for the Docker image (frontend/Dockerfile sets NEXT_OUTPUT).
   output: process.env.NEXT_OUTPUT === "standalone" ? "standalone" : undefined,
   // The app renders in the browser (data is per-user and fetched client-side), so Cache

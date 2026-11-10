@@ -18,6 +18,12 @@ class RegisterRequest(BaseModel):
     organization_name: str = Field(min_length=2, max_length=200)
 
 
+class AuthConfig(BaseModel):
+    """Public settings the sign-in pages need before anyone is signed in."""
+
+    registration_enabled: bool
+
+
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

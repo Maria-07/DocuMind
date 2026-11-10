@@ -10,7 +10,10 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 # The /api/* rewrite target is compiled into the build output — set it here, not at runtime.
 ARG API_URL=http://backend:8000
+# Upload size (MB) the /api proxy lets through; keep it in step with the backend's MAX_UPLOAD_SIZE_MB.
+ARG MAX_UPLOAD_SIZE_MB=50
 ENV API_URL=${API_URL} \
+    MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB} \
     NEXT_OUTPUT=standalone \
     NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules

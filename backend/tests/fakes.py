@@ -6,6 +6,8 @@ by the opt-in tests (test_real_models.py, test_real_answers.py).
 
 from __future__ import annotations
 
+import html
+import re
 import zlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -23,6 +25,11 @@ from app.rag.generation.base import (
 )
 
 DIM = 64
+
+# Token usage the scripted LLM reports (so tests can check totals and costs).
+ANSWER_USAGE = {"input_tokens": 1000, "output_tokens": 200}
+CHAT_USAGE = {"input_tokens": 300, "output_tokens": 50}
+ROUTING_USAGE = {"input_tokens": 100, "output_tokens": 10}
 
 
 def tokens(text: str) -> list[str]:
@@ -104,11 +111,18 @@ class LexicalReranker:
 
 
 class ScriptedLLM:
-    """LLMProvider that answers by citing the first passage of the given sources."""
+    """LLMProvider that answers by citing the first passage of the given sources.
 
-    def __init__(self) -> None:
+    Routing (``complete_json`` name ``route_message``) defaults to "documents" with the message as the
+    query (plus the last user turn as context for a follow-up); script it via ``json_responses``.
+    Conversational replies (``stream_chat``) say ``chat_reply``.
+    """
+
+    def __init__(self, model_id: str = "test/scripted-llm") -> None:
+        self._model_id = model_id
         self.calls: list[dict[str, Any]] = []
-        self.condense_calls: list[str] = []
+        self.chat_calls: list[dict[str, Any]] = []
+        self.chat_reply = "Hello! How can I help you today?"
         self.script: Callable[[list[SourceDocument]], list[GenerationEvent]] | None = None
         self.fail_with: GenerationError | None = None
         self.json_calls: list[dict[str, Any]] = []
@@ -116,7 +130,7 @@ class ScriptedLLM:
 
     @property
     def model_id(self) -> str:
-        return "test/scripted-llm"
+        return self._model_id
 
     async def stream_answer(
         self, *, question: str, sources: list[SourceDocument], history: list[ChatTurn]
@@ -139,21 +153,45 @@ class ScriptedLLM:
             BlockEnd(),
             TextDelta("."),
             BlockEnd(),
-            GenerationDone(model="test/scripted-llm", stop_reason="end_turn", usage={"output_tokens": 12}),
+            GenerationDone(model="test/scripted-llm", stop_reason="end_turn", usage=ANSWER_USAGE),
         ]
 
-    async def condense_question(self, *, question: str, history: list[ChatTurn]) -> str:
-        self.condense_calls.append(question)
-        last_user = next((t.content for t in reversed(history) if t.role == "user"), "")
-        return f"{question} (context: {last_user})"
+    async def stream_chat(self, *, question: str, history: list[ChatTurn]) -> AsyncIterator[GenerationEvent]:
+        self.chat_calls.append({"question": question, "history": history})
+        if self.fail_with is not None:
+            yield TextDelta("Partial ")
+            raise self.fail_with
+        for word in self.chat_reply.split(" "):
+            yield TextDelta(word + " ")
+        yield GenerationDone(model=self._model_id, stop_reason="end_turn", usage=CHAT_USAGE)
+
+    @staticmethod
+    def default_route(prompt: str) -> dict[str, Any]:
+        match = re.search(r"<latest_message>(.*?)</latest_message>", prompt, re.S)
+        latest = html.unescape(match.group(1)) if match else prompt
+        earlier = html.unescape(prompt.split("<latest_message>")[0])
+        users = re.findall(r"^user: (.*)$", earlier, re.M)
+        return {"route": "documents", "search_query": f"{latest} (context: {users[-1]})" if users else latest}
 
     async def complete_json(
-        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        name: str,
+        max_tokens: int = 8000,
+        effort: str | None = None,
+        usage_out: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        self.json_calls.append({"name": name, "prompt": prompt})
+        if usage_out is not None and name == "route_message":
+            usage_out.update(ROUTING_USAGE)
+        self.json_calls.append({"name": name, "prompt": prompt, "effort": effort})
         if name in self.json_responses:
             response = self.json_responses[name]
             return response(prompt) if callable(response) else response
+        if name == "route_message":
+            return self.default_route(prompt)
         if name == "answer_judgement":
             return {
                 "claims": 2,

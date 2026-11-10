@@ -46,6 +46,7 @@ class BlockEnd:
 class GenerationDone:
     model: str
     stop_reason: str | None
+    # Token usage in the provider-independent shape of ``catalog.USAGE_COUNTERS``.
     usage: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -70,16 +71,33 @@ class LLMProvider(Protocol):
 
     def stream_answer(
         self, *, question: str, sources: list[SourceDocument], history: list[ChatTurn]
-    ) -> AsyncIterator[GenerationEvent]: ...
+    ) -> AsyncIterator[GenerationEvent]:
+        """A grounded answer from retrieved ``sources``, with citations."""
+        ...
 
-    async def condense_question(self, *, question: str, history: list[ChatTurn]) -> str: ...
+    def stream_chat(self, *, question: str, history: list[ChatTurn]) -> AsyncIterator[GenerationEvent]:
+        """A conversational reply that needs no documents (greeting, thanks, general help).
+
+        Yields ``TextDelta`` events and a final ``GenerationDone``; never citations.
+        """
+        ...
 
     async def complete_json(
-        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        name: str,
+        max_tokens: int = 8000,
+        effort: str | None = None,
+        usage_out: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """One non-streaming call whose output is constrained to ``schema`` (structured outputs).
 
         Schemas must be strict-compatible: every property listed in ``required``,
         ``additionalProperties: false``, optional values expressed as ``["type", "null"]``.
+        ``effort`` overrides the configured reasoning effort (small classification calls pass "low").
+        ``usage_out``, when given, receives the call's token usage (see ``catalog.USAGE_COUNTERS``).
         """
         ...

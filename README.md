@@ -6,7 +6,7 @@ Upload, manage, search and chat with your organization's documents (PDF, DOCX, X
 Retrieval-Augmented Generation with source citations, strict per-document permissions, and a
 built-in RAG evaluation framework.
 
-> User manual: [docs/user-manual.md](docs/user-manual.md) · Architecture & design: [docs/architecture.md](docs/architecture.md) · Deployment & operations: [docs/deployment.md](docs/deployment.md)
+> User manual: [docs/user-manual.md](docs/user-manual.md) · Architecture & design: [docs/architecture.md](docs/architecture.md) · Deployment & operations: [docs/deployment.md](docs/deployment.md) · Public demo on Vercel + AWS Lightsail: [docs/deploy-vercel-lightsail.md](docs/deploy-vercel-lightsail.md)
 
 ## Status
 
@@ -45,11 +45,15 @@ sharing dialogs (users/groups, view/manage) — see *Comparison, evaluation & an
 
 | Step | Implementation |
 |---|---|
+| Route | Every message is routed first. Unmistakable greetings / thanks / goodbyes are recognised by rule (no model call); anything else gets one small structured-output call that picks **chat** (greeting, "what can you do?", general help: answered by the assistant with *no* document access, no search, no citations) or **documents** (the pipeline below) and rewrites a follow-up into a standalone search query. A routing failure falls back to a document search; the router errs towards documents when unsure (`app/rag/routing.py`) |
 | Retrieve | Dense + BM25 in one Qdrant query, fused with RRF. The filter (org, searchable, ACL tokens, optional scope) is built only from the server-side user — never from request input |
 | Re-check | Every hit is re-verified in PostgreSQL (document live, user may view it, active index version), so a stale vector payload can only narrow results |
 | Rerank | `BAAI/bge-reranker-base` cross-encoder on the top 20; relevance threshold decides "not found" (the LLM is then not called); max 4 chunks per document; token budget |
 | Generate | `LLM_PROVIDER=anthropic` (default `claude-opus-5-5`): each chunk is a citable `document` (one block per sentence/row) using Claude's native citations, so citations point at exact passages; system prompt cached; refusal fallback. `LLM_PROVIDER=openai` (e.g. `gpt-5-nano`): Responses API with `store=False`; numbered `<source>` blocks cited with inline `[n]` markers (per-chunk granularity). Both stream |
 | Cite | Every citation is validated against the chunk it claims to quote; invalid ones are dropped and counted. Answers carry `[n]` markers; citations include document, page / section / sheet + rows, snippet and a link |
+| Voice | One persona, `ASSISTANT_SYSTEM_PROMPT` (friendly, brief, honest about what it knows and can do), is shared by every reply; the grounded-answer prompts extend it with the citation rules. General-knowledge answers are labelled as such and never presented as document facts; a document-less reply never states facts about the organization (`app/rag/generation/prompts.py`, versioned by `PROMPT_VERSION`) |
+| Models & cost | Every message can pick its model from a catalog (`app/rag/generation/models.json`: OpenAI, Anthropic and Google; a model is offered when its provider key is set). Each reply stores its token usage and an **estimated cost** (provider-reported tokens x the catalog's prices in force that day, with cache and reasoning tokens priced correctly), including the small routing call, which runs on `LLM_ROUTER_MODEL` or the default model. Prices are estimates: edit the catalog when they change |
+| Edit & resubmit | A user message can be edited and resubmitted (optionally with another model). It and everything after it are marked superseded, hidden from the conversation and from the model's context, and kept in the database; the new message takes their place |
 | Safety | Retrieved text is data, never instructions (prompt + no tools); injection-like chunks are flagged to the model; document facts and "**Interpretation:**" are kept apart |
 
 **Measured retrieval accuracy** (`tests/integration/test_retrieval_accuracy.py`: 12 paraphrased
@@ -71,7 +75,7 @@ evaluation module measures quality on real document sets.
 |---|---|
 | Compare | Each document contributes its own sources (chunks relevant to the optional focus question, else its opening content), so a large document cannot crowd out the others. One structured-output call (JSON schema) returns aspects × documents with `present / absent / unclear`, a difference summary and a conflict flag. Server-side validation keeps only citations of the finding's own document; a "present" finding without valid evidence is downgraded to "unclear". Access is checked per document |
 | Evaluate | Datasets of test cases (question, optional reference answer, relevant documents, **evidence quotes** that are resolved to the chunks of the config under test, so labels survive re-chunking). A run executes every case through the **real** retrieval + answer path on the worker, as the user who started it |
-| Metrics | Retrieval: Precision@5, Recall@5, MRR, NDCG@5, document recall. Answer (LLM judge, versioned rubric `judge-v1`, structured output, rationale stored): faithfulness, hallucination rate, answer relevance, context relevance, correctness vs. reference. Deterministic: citation accuracy, abstention accuracy (says "not found" exactly when it should), latency |
+| Metrics | Retrieval: Precision@5, Recall@5, MRR, NDCG@5, document recall. Answer (LLM judge, versioned rubric `judge-v2`, structured output, rationale stored): faithfulness, hallucination rate, answer relevance, context relevance, correctness vs. reference. Deterministic: citation accuracy, abstention accuracy (says "not found" exactly when it should), latency |
 | Regressions | Each run records its full configuration (models, chunking, thresholds, prompt and judge versions) and is compared with the previous completed run; the UI flags drops > 5 pts and `python -m app.cli evaluate` exits non-zero for CI |
 | Analytics | Admin dashboard from real data: document counts, uploads vs. indexed per day, failures, questions per day, "not found" rate, retrieval latency by stage (p50/p95), grounded-answer rate, tokens |
 | Embeddings | Configurations with document / chunk / vector counts; re-index stale, failed or all documents (old index keeps serving until each new version is complete) |
@@ -84,8 +88,8 @@ python -m app.cli evaluate --dataset <uuid> --fail-under retrieval.ndcg@5=0.7   
 The judge uses `LLM_MODEL` unless `EVAL_JUDGE_MODEL` names another model of the same provider.
 
 **Chat API:** `POST /chat/conversations` → `POST /chat/conversations/{id}/messages` with
-`Accept: text/event-stream` streams `meta`, `status`, `sources`, `token`, `citation`, `done`
-(or `error`) events; without it the complete answer is returned as JSON. Conversations are private to
+`Accept: text/event-stream` (body: `content`, optional `model` from `GET /chat/models`, optional `edit_message_id`) streams `meta`, `status` (`thinking`, then `retrieving` for document questions, then `generating`),
+`sources`, `token`, `citation`, `done` (with `route`: `chat` or `documents`) (or `error`) events; without it the complete answer is returned as JSON. Conversations are private to
 their owner. **Search API:** `POST /search/hybrid`, `/search/semantic`, `/search/documents`.
 
 ## Repository layout
@@ -222,7 +226,7 @@ Interactive docs: `/docs`. All endpoints except register/login/refresh/logout re
 | Categories | `GET/POST /categories` `PATCH/DELETE /categories/{id}` |
 | Organization members | `GET /organization/members` (any member; id, name, e-mail — for share dialogs) |
 | Documents | `POST /documents/upload` `GET /documents` `GET/PATCH/DELETE /documents/{id}` `POST /documents/{id}/reprocess` `GET /documents/{id}/jobs` `GET /documents/{id}/download` `GET /documents/{id}/preview` `GET/PUT /documents/{id}/permissions` |
-| Chat & search | `GET/POST /chat/conversations` `GET/PATCH/DELETE /chat/conversations/{id}` `POST /chat/conversations/{id}/messages` (SSE) `POST /search/hybrid` `/search/semantic` `/search/documents` |
+| Chat & search | `GET /chat/models` `GET/POST /chat/conversations` `GET/PATCH/DELETE /chat/conversations/{id}` `POST /chat/conversations/{id}/messages` (SSE) `POST /search/hybrid` `/search/semantic` `/search/documents` |
 | Comparisons | `POST /comparisons` `GET /comparisons` `GET /comparisons/{id}` |
 | Evaluations | `GET/POST /evaluations/datasets` `DELETE /evaluations/datasets/{id}` `GET/POST /evaluations/datasets/{id}/cases` `DELETE …/cases/{case_id}` `POST /evaluations/run` `GET /evaluations/results` `GET /evaluations/results/{id}` `GET /evaluations/metrics` (view: managers & admins; run: admins) |
 | Analytics (admin) | `GET /analytics/overview` `GET /analytics/documents?days=` `GET /analytics/retrieval?days=` |

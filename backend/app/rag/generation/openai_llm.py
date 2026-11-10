@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from html import escape
-from typing import Any
+from typing import Any, Protocol
 
 import openai
 import structlog
@@ -26,9 +26,10 @@ from app.rag.generation.base import (
     GenerationError,
     GenerationEvent,
     SourceDocument,
+    TextDelta,
 )
 from app.rag.generation.markers import MarkerParser
-from app.rag.generation.prompts import CONDENSE_SYSTEM_PROMPT, MARKER_ANSWER_SYSTEM_PROMPT
+from app.rag.generation.prompts import ASSISTANT_SYSTEM_PROMPT, MARKER_ANSWER_SYSTEM_PROMPT
 
 log = structlog.get_logger(__name__)
 
@@ -73,6 +74,13 @@ def _to_generation_error(exc: Exception) -> GenerationError:
     if isinstance(exc, openai.AuthenticationError | openai.PermissionDeniedError):
         return GenerationError("llm_auth", "The language model is not configured correctly")
     if isinstance(exc, openai.RateLimitError):
+        detail = str(getattr(exc, "body", None) or exc).lower()
+        # "limit: 0" (Gemini free tier) and insufficient_quota (OpenAI) mean the plan can't serve this
+        # model at all; retrying won't help, unlike a per-minute limit.
+        if "limit: 0" in detail or "insufficient_quota" in detail:
+            return GenerationError(
+                "llm_quota_exceeded", "This model is not available on the API key's plan, or its quota is used up"
+            )
         return GenerationError("llm_rate_limited", "The language model is busy; please retry", retryable=True)
     if isinstance(exc, openai.BadRequestError | openai.NotFoundError):
         return GenerationError("llm_bad_request", "The language model rejected the request")
@@ -81,6 +89,27 @@ def _to_generation_error(exc: Exception) -> GenerationError:
     if isinstance(exc, openai.APIConnectionError | openai.APITimeoutError):
         return GenerationError("llm_unreachable", "Could not reach the language model", retryable=True)
     return GenerationError("llm_error", "The language model request failed")
+
+
+class _TextParser(Protocol):
+    def feed(self, text: str) -> list[GenerationEvent]: ...
+
+    def flush(self) -> list[GenerationEvent]: ...
+
+
+class _PlainText:
+    """Conversational replies carry no citations: text passes straight through."""
+
+    def feed(self, text: str) -> list[GenerationEvent]:
+        return [TextDelta(text)]
+
+    def flush(self) -> list[GenerationEvent]:
+        return []
+
+
+def _light_effort(effort: str) -> str:
+    """Reasoning effort for small calls (routing, chat replies): low, unless the configuration is lower."""
+    return effort if effort in ("none", "minimal") else "low"
 
 
 class OpenAILLM:
@@ -100,27 +129,43 @@ class OpenAILLM:
     def model_id(self) -> str:
         return self.settings.llm_model
 
-    async def stream_answer(
+    def stream_answer(
         self, *, question: str, sources: list[SourceDocument], history: list[ChatTurn]
     ) -> AsyncIterator[GenerationEvent]:
         s = self.settings
-        parser = MarkerParser(sources)
+        # A plain dict: the SDK's typed overloads don't list every effort level.
+        request: dict[str, Any] = {
+            "model": s.llm_model,
+            "instructions": MARKER_ANSWER_SYSTEM_PROMPT,
+            "input": [
+                *_history_input(history),
+                {"role": "user", "content": build_sources_text(question, sources)},
+            ],
+            "max_output_tokens": s.llm_max_tokens,  # includes reasoning tokens
+            "reasoning": {"effort": s.llm_effort},
+            "store": False,
+            "stream": True,
+        }
+        return self._stream(request, MarkerParser(sources))
+
+    def stream_chat(self, *, question: str, history: list[ChatTurn]) -> AsyncIterator[GenerationEvent]:
+        s = self.settings
+        request: dict[str, Any] = {
+            "model": s.llm_model,
+            "instructions": ASSISTANT_SYSTEM_PROMPT,
+            "input": [*_history_input(history), {"role": "user", "content": question}],
+            "max_output_tokens": s.llm_max_tokens,
+            "reasoning": {"effort": _light_effort(s.llm_effort)},
+            "store": False,
+            "stream": True,
+        }
+        return self._stream(request, _PlainText())
+
+    async def _stream(self, request: dict[str, Any], parser: _TextParser) -> AsyncIterator[GenerationEvent]:
+        s = self.settings
         final: Any = None
         refused = False
         try:
-            # A plain dict: the SDK's typed overloads don't list every effort level.
-            request: dict[str, Any] = {
-                "model": s.llm_model,
-                "instructions": MARKER_ANSWER_SYSTEM_PROMPT,
-                "input": [
-                    *_history_input(history),
-                    {"role": "user", "content": build_sources_text(question, sources)},
-                ],
-                "max_output_tokens": s.llm_max_tokens,  # includes reasoning tokens
-                "reasoning": {"effort": s.llm_effort},
-                "store": False,
-                "stream": True,
-            }
             stream = await self.client.responses.create(**request)
             async for event in stream:
                 kind = event.type
@@ -157,43 +202,36 @@ class OpenAILLM:
         )
 
     async def complete_json(
-        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        name: str,
+        max_tokens: int = 8000,
+        effort: str | None = None,
+        usage_out: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # A plain dict: the SDK's typed overloads don't list every effort level.
+        request: dict[str, Any] = {
+            "model": self.settings.llm_model,
+            "instructions": system,
+            "input": prompt,
+            "max_output_tokens": max_tokens,  # includes reasoning tokens
+            "reasoning": {"effort": effort or self.settings.llm_effort},
+            "text": {"format": {"type": "json_schema", "name": name, "schema": schema, "strict": True}},
+            "store": False,
+        }
         try:
-            response = await self.client.responses.create(
-                model=self.settings.llm_model,
-                instructions=system,
-                input=prompt,
-                max_output_tokens=max_tokens,  # includes reasoning tokens
-                reasoning={"effort": self.settings.llm_effort},
-                text={"format": {"type": "json_schema", "name": name, "schema": schema, "strict": True}},
-                store=False,
-            )
+            response = await self.client.responses.create(**request)
         except openai.APIError as exc:
             log.warning("llm_json_failed", task=name, error=type(exc).__name__)
             raise _to_generation_error(exc) from exc
+        if usage_out is not None:
+            usage_out.update(_usage(getattr(response, "usage", None)))
         if getattr(response, "status", "completed") == "incomplete":
             raise GenerationError("llm_truncated", "The language model response was cut off")
         try:
             return json.loads(response.output_text or "")  # type: ignore[no-any-return]
         except json.JSONDecodeError as exc:
             raise GenerationError("llm_invalid_output", "The language model returned invalid JSON") from exc
-
-    async def condense_question(self, *, question: str, history: list[ChatTurn]) -> str:
-        transcript = "\n".join(f"{t.role.upper()}: {t.content[:2000]}" for t in history[-6:])
-        try:
-            response = await self.client.responses.create(
-                model=self.settings.llm_model,
-                instructions=CONDENSE_SYSTEM_PROMPT,
-                input=f"Conversation:\n{transcript}\n\nLatest message: {question}\n\nStandalone query:",
-                max_output_tokens=2000,  # reasoning tokens count toward this limit
-                reasoning={
-                    "effort": "low" if self.settings.llm_effort not in ("none", "minimal") else self.settings.llm_effort
-                },
-                store=False,
-            )
-        except openai.APIError as exc:
-            log.warning("condense_failed", error=type(exc).__name__)
-            return question  # retrieval with the raw question is a safe fallback
-        text = (response.output_text or "").strip().strip('"')
-        return text[:1000] or question

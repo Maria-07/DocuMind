@@ -1,0 +1,159 @@
+{
+  "updated": "2026-11-09",
+  "note": "USD per 1M tokens for short prompts, from each provider's public pricing page on 2026-11-09. Costs shown in DocuMind are estimates computed from these numbers: verify them against your invoices, and edit this file (or point LLM_CATALOG_FILE at your own copy) when prices change. A price with a \"from\" date applies from that day on. Only models that answered a real test call with the project's keys are listed. Gemini Pro-tier models (gemini-3.1-pro-preview, gemini-4-argon) need a paid Google plan: add them here once billing is enabled.",
+  "models": [
+    {
+      "id": "gpt-5-nano",
+      "provider": "openai",
+      "label": "GPT-5 nano",
+      "description": "Fastest and cheapest. Good for simple questions.",
+      "prices": [
+        {
+          "input": 0.05,
+          "cached_input": 0.005,
+          "output": 0.4
+        }
+      ]
+    },
+    {
+      "id": "gpt-5-mini",
+      "provider": "openai",
+      "label": "GPT-5 mini",
+      "description": "Fast and inexpensive, a step up in quality.",
+      "prices": [
+        {
+          "input": 0.25,
+          "cached_input": 0.025,
+          "output": 2.0
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-luna",
+      "provider": "openai",
+      "label": "GPT-6 luna",
+      "description": "Small current-generation model.",
+      "prices": [
+        {
+          "input": 0.1,
+          "cached_input": 0.01,
+          "output": 0.5
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-sol",
+      "provider": "openai",
+      "label": "GPT-6 sol",
+      "description": "Balanced quality and cost.",
+      "prices": [
+        {
+          "input": 2.0,
+          "cached_input": 0.2,
+          "output": 10.0
+        }
+      ]
+    },
+    {
+      "id": "gpt-5.5",
+      "provider": "openai",
+      "label": "GPT-5.5",
+      "description": "Strong reasoning, higher cost.",
+      "prices": [
+        {
+          "input": 5.0,
+          "cached_input": 0.5,
+          "output": 30.0
+        }
+      ]
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "provider": "anthropic",
+      "label": "Claude Haiku 5.5",
+      "description": "Fastest Claude, very low cost (prompts up to 100k tokens).",
+      "prices": [
+        {
+          "input": 0.1,
+          "cached_input": 0.01,
+          "cache_write": 0.125,
+          "output": 0.5
+        }
+      ]
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "provider": "anthropic",
+      "label": "Claude Sonnet 5.5",
+      "description": "Balanced quality and cost.",
+      "prices": [
+        {
+          "input": 2.0,
+          "cached_input": 0.1,
+          "cache_write": 2.5,
+          "output": 10.0
+        }
+      ]
+    },
+    {
+      "id": "claude-opus-5-5",
+      "provider": "anthropic",
+      "label": "Claude Opus 5.5",
+      "description": "High quality for hard questions.",
+      "prices": [
+        {
+          "input": 4.0,
+          "cached_input": 0.2,
+          "cache_write": 5.0,
+          "output": 20.0
+        }
+      ]
+    },
+    {
+      "id": "claude-fable-5-1",
+      "provider": "anthropic",
+      "label": "Claude Fable 5.1",
+      "description": "Most capable Claude, highest cost.",
+      "prices": [
+        {
+          "input": 10.0,
+          "cached_input": 0.25,
+          "cache_write": 12.5,
+          "output": 50.0
+        }
+      ]
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "provider": "google",
+      "label": "Gemini 3.5 Flash-Lite",
+      "description": "Fast and inexpensive.",
+      "prices": [
+        {
+          "input": 0.3,
+          "cached_input": 0.03,
+          "output": 2.5
+        }
+      ]
+    },
+    {
+      "id": "gemini-3.6-flash",
+      "provider": "google",
+      "label": "Gemini 3.6 Flash",
+      "description": "Fast, good quality. Price doubles on 2027-01-01.",
+      "prices": [
+        {
+          "input": 0.75,
+          "cached_input": 0.075,
+          "output": 3.75
+        },
+        {
+          "from": "2027-01-01",
+          "input": 1.5,
+          "cached_input": 0.15,
+          "output": 7.5
+        }
+      ]
+    }
+  ]
+}

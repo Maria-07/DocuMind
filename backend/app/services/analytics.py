@@ -74,6 +74,7 @@ class AnalyticsService:
                         Conversation.organization_id == org,
                         Message.role == "assistant",
                         Message.status == "complete",
+                        Message.route.is_distinct_from("chat"),  # greetings etc. are not document answers
                         Message.created_at >= week_ago,
                     )
                 )
@@ -217,12 +218,15 @@ class AnalyticsService:
                     ).where(base)
                 )
             ).one()
+            # Latency and grounding describe document answers; conversational replies (route "chat",
+            # e.g. greetings) would skew both. Token use counts every reply.
+            doc_answer = Message.route.is_distinct_from("chat")
             gen = (
                 await s.execute(
                     select(
-                        func.percentile_cont(0.5).within_group(Message.latency_ms),
-                        func.percentile_cont(0.95).within_group(Message.latency_ms),
-                        func.count(),
+                        func.percentile_cont(0.5).within_group(Message.latency_ms).filter(doc_answer),
+                        func.percentile_cont(0.95).within_group(Message.latency_ms).filter(doc_answer),
+                        func.count().filter(doc_answer),
                         func.count().filter(Message.grounded.is_(True)),
                         func.sum(cast(Message.usage["input_tokens"].astext, Float)),
                         func.sum(cast(Message.usage["output_tokens"].astext, Float)),

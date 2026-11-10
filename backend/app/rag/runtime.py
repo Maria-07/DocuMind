@@ -12,6 +12,7 @@ from app.core.config import Settings
 from app.rag.embeddings import EmbeddingProvider, SparseEncoder, build_embedding_provider, build_sparse_encoder
 from app.rag.generation import build_llm
 from app.rag.generation.base import LLMProvider
+from app.rag.generation.registry import ModelRegistry
 from app.rag.reranking import FastEmbedReranker, Reranker
 from app.rag.retrieval import Retriever
 
@@ -21,7 +22,8 @@ log = structlog.get_logger(__name__)
 @dataclass(slots=True)
 class RagRuntime:
     retriever: Retriever
-    llm: LLMProvider | None  # None when no LLM credentials are configured (search still works)
+    llm: LLMProvider | None  # the default model; None when its credentials are missing (search still works)
+    models: ModelRegistry  # every model users can pick in chat (default included), with prices
 
 
 def build_rag_runtime(
@@ -38,11 +40,12 @@ def build_rag_runtime(
         reranker = FastEmbedReranker(settings.reranker_model, cache_dir=settings.model_cache_dir)
     if llm is None:
         llm = build_llm(settings)
-    if llm is None:
-        key = "OPENAI_API_KEY" if settings.llm_provider == "openai" else "ANTHROPIC_API_KEY"
-        log.warning("llm_not_configured", provider=settings.llm_provider, hint=f"set {key} to enable chat answers")
+    models = ModelRegistry(settings, default=llm)
+    available = [o.spec.id for o in models.available()]
+    if not available:
+        log.warning("llm_not_configured", provider=settings.llm_provider, hint="set an LLM API key to enable chat")
     else:
-        log.info("llm_configured", provider=settings.llm_provider, model=settings.llm_model)
+        log.info("llm_configured", default=models.default_id, available=available)
     retriever = Retriever(
         settings=settings,
         sessionmaker=sessionmaker,
@@ -52,4 +55,4 @@ def build_rag_runtime(
         sparse=sparse or build_sparse_encoder(settings),
         reranker=reranker,
     )
-    return RagRuntime(retriever=retriever, llm=llm)
+    return RagRuntime(retriever=retriever, llm=llm, models=models)

@@ -14,6 +14,8 @@ from sqlalchemy import select, update
 from app.core.resources import AppResources
 from app.models import Document, Message, MessageCitation, RetrievalLog
 from app.rag.generation.base import GenerationError
+from app.rag.generation.catalog import Catalog, ModelSpec, Price
+from app.rag.generation.registry import ModelRegistry
 from app.rag.ingestion.pipeline import IngestionPipeline
 from app.rag.runtime import build_rag_runtime
 from tests.documents import build_docx, build_pdf, build_xlsx
@@ -217,7 +219,7 @@ async def test_chat_streams_grounded_answer_and_persists_it(
         assert log.message_id == uuid.UUID(assistant["id"])
 
 
-async def test_follow_up_question_is_condensed_for_retrieval(
+async def test_follow_up_is_rewritten_into_a_standalone_query(
     client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
 ) -> None:
     admin = await register(client)
@@ -225,7 +227,8 @@ async def test_follow_up_question_is_condensed_for_retrieval(
     conv = await _new_conversation(admin)
     await _ask(admin, conv, "What does the policy say about passwords?")
     await _ask(admin, conv, "And how often?")
-    assert llm.condense_calls == ["And how often?"]
+    routed = [c for c in llm.json_calls if c["name"] == "route_message"]
+    assert len(routed) == 2 and "<conversation>" not in routed[0]["prompt"] and "<conversation>" in routed[1]["prompt"]
     assert [t.role for t in llm.calls[1]["history"]] == ["user", "assistant"]
     async with resources.sessionmaker() as s:
         last = (
@@ -236,6 +239,112 @@ async def test_follow_up_question_is_condensed_for_retrieval(
     assert (
         last is not None and last.search_query == "And how often? (context: What does the policy say about passwords?)"
     )
+    assert last.route == "documents"
+
+
+# --- conversational replies (no documents needed) --------------------------------------------
+
+
+async def _assistant_messages(resources: AppResources) -> list[Message]:
+    async with resources.sessionmaker() as s:
+        rows = await s.execute(select(Message).where(Message.role == "assistant").order_by(Message.created_at))
+        return list(rows.scalars())
+
+
+async def test_greeting_gets_a_conversational_reply_without_search(
+    client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    await _ingest(admin, pipeline, resources, "policy.docx", build_docx())
+    conv = await _new_conversation(admin)
+
+    events = await _ask(admin, conv, "Hello!")
+    names = [n for n, _ in events]
+    stages = [d["stage"] for n, d in events if n == "status"]
+    assert names[0] == "meta" and names[-1] == "done"
+    assert stages == ["thinking", "generating"]  # never "retrieving": no document search happened
+    assert "sources" not in names and "citation" not in names
+    assert "".join(d["text"] for n, d in events if n == "token").strip() == llm.chat_reply
+    done = dict(events)["done"]
+    assert done["route"] == "chat" and done["grounded"] is False and done["citations"] == []
+
+    # Greeting rule: no router call, no retrieval, no grounded answer.
+    assert llm.json_calls == [] and llm.calls == [] and len(llm.chat_calls) == 1
+    async with resources.sessionmaker() as s:
+        assert (await s.execute(select(RetrievalLog))).first() is None
+    (assistant,) = await _assistant_messages(resources)
+    assert assistant.route == "chat" and assistant.status == "complete" and assistant.search_query is None
+    assert assistant.content == llm.chat_reply and assistant.model == "test/scripted-llm"
+
+    detail = (await admin.client.get(f"/api/v1/chat/conversations/{conv}", headers=admin.headers)).json()
+    assert detail["messages"][1]["route"] == "chat"
+
+
+async def test_model_routed_chat_question_and_history(
+    client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    await _ingest(admin, pipeline, resources, "policy.docx", build_docx())
+    conv = await _new_conversation(admin)
+    await _ask(admin, conv, "How often must passwords be rotated?")  # a document answer first
+
+    llm.json_responses["route_message"] = {"route": "chat", "search_query": ""}
+    llm.chat_reply = "I can search your documents, summarise them and compare them."
+    events = await _ask(admin, conv, "What can you do?")
+    assert dict(events)["done"]["route"] == "chat"
+    assert "sources" not in dict(events)
+    # The chat reply sees the conversation so far, so it can refer back to it.
+    assert [t.role for t in llm.chat_calls[0]["history"]] == ["user", "assistant"]
+    assert len(llm.calls) == 1  # only the first question used the grounded path
+    assert [m.route for m in await _assistant_messages(resources)] == ["documents", "chat"]
+    async with resources.sessionmaker() as s:
+        assert len((await s.execute(select(RetrievalLog))).all()) == 1  # the document question only
+
+
+async def test_thanks_after_an_answer_is_a_chat_reply(
+    client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    await _ingest(admin, pipeline, resources, "policy.docx", build_docx())
+    conv = await _new_conversation(admin)
+    await _ask(admin, conv, "How often must passwords be rotated?")
+    llm.chat_reply = "You're welcome! Let me know if you'd like to explore anything else."
+    events = await _ask(admin, conv, "Thanks!")
+    answer = "".join(d["text"] for n, d in events if n == "token")
+    assert answer.strip() == llm.chat_reply and dict(events)["done"]["route"] == "chat"
+    assert len(llm.calls) == 1 and len(llm.chat_calls) == 1
+
+
+async def test_routing_failure_still_searches_the_documents(
+    client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    await _ingest(admin, pipeline, resources, "policy.docx", build_docx())
+    conv = await _new_conversation(admin)
+
+    def boom(_: str) -> dict[str, Any]:
+        raise GenerationError("llm_unavailable", "down", retryable=True)
+
+    llm.json_responses["route_message"] = boom
+    events = await _ask(admin, conv, "How often must passwords be rotated?")
+    done = dict(events)["done"]
+    assert done["route"] == "documents" and done["grounded"] is True
+    assert llm.chat_calls == [] and llm.calls[0]["question"] == "How often must passwords be rotated?"
+
+
+async def test_chat_reply_failure_is_reported_and_recorded(
+    client: httpx.AsyncClient, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    conv = await _new_conversation(admin)
+    llm.fail_with = GenerationError("llm_unavailable", "The language model is temporarily unavailable", retryable=True)
+    events = await _ask(admin, conv, "Hello!")
+    names = [n for n, _ in events]
+    assert "error" in names  # the stream still ends with "done"; the client keeps the error state
+    assert dict(events)["error"]["code"] == "llm_unavailable" and dict(events)["error"]["retryable"] is True
+    (assistant,) = await _assistant_messages(resources)
+    assert assistant.status == "error" and assistant.error == "llm_unavailable" and assistant.content == "Partial"
+    assert assistant.route == "chat"
 
 
 async def test_no_relevant_context_means_no_llm_call(
@@ -356,9 +465,267 @@ async def test_chat_without_llm_configured_returns_503(
     client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any
 ) -> None:
     rag.llm = None
+    rag.models = ModelRegistry(resources.settings)  # no provider key configured: no model is available
     admin = await register(client)
     conv = await _new_conversation(admin)
     resp = await client.post(
         f"/api/v1/chat/conversations/{conv}/messages", headers=admin.headers, json={"content": "hello"}
     )
     assert resp.status_code == 503 and resp.json()["error"]["code"] == "llm_not_configured"
+
+
+# --- model choice, token cost, edit & resubmit ----------------------------------------------------------
+
+OTHER = "test/other-llm"
+
+
+def _price_models(rag: Any, **prices: Price) -> None:
+    """Make these (fake) model ids selectable, each with a price."""
+    rag.models.catalog = Catalog(
+        models=[
+            ModelSpec(id=model_id, provider="openai", label=model_id.split("/")[-1], prices=[price])
+            for model_id, price in prices.items()
+        ]
+    )
+
+
+async def _messages(s: Session, conv: str) -> list[dict[str, Any]]:
+    detail = (await s.client.get(f"/api/v1/chat/conversations/{conv}", headers=s.headers)).json()
+    return list(detail["messages"])
+
+
+async def _post_raw(s: Session, conv: str, **body: Any) -> httpx.Response:
+    return await s.client.post(
+        f"/api/v1/chat/conversations/{conv}/messages",
+        headers={**s.headers, "Accept": "text/event-stream"},
+        json=body,
+    )
+
+
+async def test_models_endpoint_lists_selectable_models_with_prices(
+    client: httpx.AsyncClient, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    rag.models.register(ScriptedLLM(OTHER))
+    _price_models(rag, **{llm.model_id: Price(input=1, output=2, cached_input=0.1), OTHER: Price(input=5, output=25)})
+    body = (await client.get("/api/v1/chat/models", headers=admin.headers)).json()
+    assert body["default"] == llm.model_id
+    by_id = {m["id"]: m for m in body["models"]}
+    assert set(by_id) == {llm.model_id, OTHER}
+    assert by_id[llm.model_id]["is_default"] is True and by_id[OTHER]["is_default"] is False
+    assert by_id[llm.model_id]["price"] == {"input": 1.0, "output": 2.0, "cached_input": 0.1}
+    assert by_id[OTHER]["price"]["output"] == 25.0 and by_id[OTHER]["label"] == "other-llm"
+    assert (await client.get("/api/v1/chat/models")).status_code == 401
+
+
+async def test_the_chosen_model_answers_and_the_cost_is_recorded(
+    client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    await _ingest(admin, pipeline, resources, "policy.docx", build_docx())
+    other = ScriptedLLM(OTHER)
+    rag.models.register(other)
+    # Routing runs on the default model (1 / 2 per M tokens); the answer on the chosen one (2 / 10 per M).
+    _price_models(rag, **{llm.model_id: Price(input=1, output=2), OTHER: Price(input=2, output=10)})
+    conv = await _new_conversation(admin)
+
+    events = await _ask(admin, conv, "How often must passwords be rotated?", model=OTHER)
+    done = dict(events)["done"]
+    assert dict(events)["meta"]["model"] == OTHER and done["model"] == OTHER
+    assert len(other.calls) == 1 and llm.calls == []  # the answer came from the chosen model only
+    assert [c["name"] for c in llm.json_calls] == ["route_message"]  # routing stayed on the default
+
+    usage = done["usage"]
+    assert usage["input_tokens"] == 1000 + 100 and usage["output_tokens"] == 200 + 10
+    assert usage["routing"]["model"] == llm.model_id and usage["answer"]["model"] == OTHER
+    assert usage["routing"]["cost_usd"] == pytest.approx((100 * 1 + 10 * 2) / 1e6)
+    assert usage["answer"]["cost_usd"] == pytest.approx((1000 * 2 + 200 * 10) / 1e6)
+    assert usage["cost_usd"] == pytest.approx(usage["routing"]["cost_usd"] + usage["answer"]["cost_usd"])
+
+    user_msg, assistant = await _messages(admin, conv)
+    assert assistant["model"] == OTHER and assistant["usage"] == usage  # persisted, not recomputed
+    assert assistant["latency_ms"] is not None and user_msg["usage"] == {}
+
+    # A later price change does not rewrite history.
+    _price_models(rag, **{llm.model_id: Price(input=100, output=100), OTHER: Price(input=100, output=100)})
+    assert (await _messages(admin, conv))[1]["usage"]["cost_usd"] == pytest.approx(usage["cost_usd"])
+
+
+async def test_a_greeting_costs_one_call_and_has_no_routing_step(
+    client: httpx.AsyncClient, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    _price_models(rag, **{llm.model_id: Price(input=1, output=2)})
+    conv = await _new_conversation(admin)
+    usage = dict(await _ask(admin, conv, "Hello!"))["done"]["usage"]
+    assert "routing" not in usage and usage["answer"]["model"] == llm.model_id
+    assert usage["input_tokens"] == 300 and usage["output_tokens"] == 50
+    assert usage["cost_usd"] == pytest.approx((300 * 1 + 50 * 2) / 1e6)
+
+
+async def test_a_model_without_a_price_reports_tokens_but_no_cost(
+    client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    await _ingest(admin, pipeline, resources, "policy.docx", build_docx())
+    conv = await _new_conversation(admin)
+    usage = dict(await _ask(admin, conv, "How often must passwords be rotated?"))["done"]["usage"]
+    assert usage["cost_usd"] is None and usage["input_tokens"] == 1100 and usage["output_tokens"] == 210
+
+
+async def test_an_unknown_model_is_rejected_before_anything_is_stored(
+    client: httpx.AsyncClient, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    conv = await _new_conversation(admin)
+    resp = await _post_raw(admin, conv, content="Hello!", model="not-a-model")
+    assert resp.status_code == 422 and resp.json()["error"]["code"] == "unknown_model"
+    assert await _messages(admin, conv) == [] and llm.chat_calls == []
+
+
+async def test_edit_and_resubmit_replaces_the_message_and_everything_after_it(
+    client: httpx.AsyncClient, pipeline: IngestionPipeline, resources: AppResources, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    await _ingest(admin, pipeline, resources, "policy.docx", build_docx())
+    conv = await _new_conversation(admin)
+    first = "How often must passwords be rotated?"
+    await _ask(admin, conv, first)
+    await _ask(admin, conv, "Which rules apply to passwords?")
+    await _ask(admin, conv, "And how often?")
+    before = await _messages(admin, conv)
+    assert [m["role"] for m in before] == ["user", "assistant"] * 3
+    edited = before[2]
+
+    events = await _ask(admin, conv, "Must passwords be rotated?", edit_message_id=edited["id"])
+    assert dict(events)["done"]["grounded"] is True
+
+    after = await _messages(admin, conv)
+    assert [m["content"] for m in after if m["role"] == "user"] == [first, "Must passwords be rotated?"]
+    assert [m["role"] for m in after] == ["user", "assistant", "user", "assistant"]
+    assert after[2]["edit_of"] == edited["id"] and after[0]["edit_of"] is None
+    assert after[0]["id"] == before[0]["id"] and after[1]["id"] == before[1]["id"]  # earlier turns are untouched
+    # The new answer was generated with only the turns before the edited message as context.
+    history = llm.calls[-1]["history"]
+    assert [t.role for t in history] == ["user", "assistant"] and history[0].content == first
+
+    # Nothing was deleted: the replaced messages are kept, marked superseded.
+    async with resources.sessionmaker() as s:
+        rows = (await s.execute(select(Message).where(Message.conversation_id == uuid.UUID(conv)))).scalars().all()
+    assert len(rows) == 8
+    assert {r.content for r in rows if r.superseded_at is not None} >= {
+        "Which rules apply to passwords?",
+        "And how often?",
+    }
+    assert sum(r.superseded_at is not None for r in rows) == 4  # the edited turn and the one after it
+
+    # The conversation continues normally from the edited point.
+    await _ask(admin, conv, "How often must passwords be rotated?")
+    assert len(await _messages(admin, conv)) == 6
+
+
+async def test_editing_the_first_message_renames_the_conversation(
+    client: httpx.AsyncClient, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    conv = await _new_conversation(admin)
+    await _ask(admin, conv, "Hello!")
+    await _ask(admin, conv, "Thanks!")
+    first = (await _messages(admin, conv))[0]
+    title = (await admin.client.get(f"/api/v1/chat/conversations/{conv}", headers=admin.headers)).json()["title"]
+    assert title == "Hello!"
+    await _ask(admin, conv, "Good morning", edit_message_id=first["id"])
+    detail = (await admin.client.get(f"/api/v1/chat/conversations/{conv}", headers=admin.headers)).json()
+    assert detail["title"] == "Good morning" and [m["role"] for m in detail["messages"]] == ["user", "assistant"]
+
+
+async def test_an_edit_can_use_a_different_model(client: httpx.AsyncClient, rag: Any, llm: ScriptedLLM) -> None:
+    admin = await register(client)
+    other = ScriptedLLM(OTHER)
+    rag.models.register(other)
+    _price_models(rag, **{llm.model_id: Price(input=1, output=1), OTHER: Price(input=1, output=1)})
+    conv = await _new_conversation(admin)
+    await _ask(admin, conv, "Hello!")
+    first = (await _messages(admin, conv))[0]
+    await _ask(admin, conv, "Good morning", edit_message_id=first["id"], model=OTHER)
+    assert [m["model"] for m in await _messages(admin, conv) if m["role"] == "assistant"] == [OTHER]
+    assert len(other.chat_calls) == 1 and len(llm.chat_calls) == 1  # one reply from each model
+
+
+async def test_only_your_own_live_user_messages_can_be_edited(
+    client: httpx.AsyncClient, make_client: ClientFactory, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    conv = await _new_conversation(admin)
+    await _ask(admin, conv, "Hello!")
+    user_msg, assistant = await _messages(admin, conv)
+
+    async def edit(target: str, conversation: str = conv, session: Session = admin) -> httpx.Response:
+        return await _post_raw(session, conversation, content="Hi!", edit_message_id=target)
+
+    for target in (assistant["id"], str(uuid.uuid4())):  # an assistant message / a message that doesn't exist
+        resp = await edit(target)
+        assert resp.status_code == 404 and resp.json()["error"]["code"] == "message_not_found"
+
+    other_conv = await _new_conversation(admin)
+    assert (await edit(user_msg["id"], other_conv)).status_code == 404  # a message from another conversation
+
+    stranger = await register(make_client())
+    assert (await edit(user_msg["id"], conv, stranger)).status_code == 404  # someone else's conversation
+
+    await _ask(admin, conv, "Hi!", edit_message_id=user_msg["id"])
+    assert (await edit(user_msg["id"])).status_code == 404  # already replaced: no longer part of the conversation
+    assert len(await _messages(admin, conv)) == 2
+
+
+async def test_a_model_that_hits_its_quota_is_flagged_then_recovers(
+    client: httpx.AsyncClient, rag: Any, llm: ScriptedLLM
+) -> None:
+    admin = await register(client)
+    other = ScriptedLLM(OTHER)
+    rag.models.register(other)
+    _price_models(rag, **{llm.model_id: Price(input=1, output=1), OTHER: Price(input=1, output=1)})
+    conv = await _new_conversation(admin)
+
+    async def flags() -> dict[str, str | None]:
+        body = (await client.get("/api/v1/chat/models", headers=admin.headers)).json()
+        return {m["id"]: m["unavailable_reason"] for m in body["models"]}
+
+    assert await flags() == {llm.model_id: None, OTHER: None}
+    reason = "You have reached your specified API usage limits. You will regain access on 2026-12-01."
+    other.fail_with = GenerationError("llm_quota_exceeded", reason)
+    events = await _ask(admin, conv, "Hello!", model=OTHER)
+    assert dict(events)["error"] == {"code": "llm_quota_exceeded", "message": reason, "retryable": False}
+    assert await flags() == {llm.model_id: None, OTHER: reason}  # greyed out, with the provider's explanation
+
+    other.fail_with = None  # the limit was lifted: the next call works and clears the flag
+    assert "error" not in dict(await _ask(admin, conv, "Thanks!", model=OTHER))
+    assert await flags() == {llm.model_id: None, OTHER: None}
+
+
+async def test_chat_model_allowlist_filters_the_list_and_rejects_other_models(
+    client: httpx.AsyncClient, rag: Any, llm: ScriptedLLM, resources: AppResources
+) -> None:
+    admin = await register(client)
+    allowed = ScriptedLLM("test/allowed-llm")
+    blocked = ScriptedLLM("test/blocked-llm")
+    for provider in (allowed, blocked):
+        rag.models.register(provider)
+    _price_models(
+        rag,
+        **{
+            llm.model_id: Price(input=1, output=1),
+            allowed.model_id: Price(input=1, output=1),
+            blocked.model_id: Price(input=9, output=9),
+        },
+    )
+    resources.settings.chat_model_ids = f"{llm.model_id},{allowed.model_id}"
+
+    body = (await client.get("/api/v1/chat/models", headers=admin.headers)).json()
+    assert {m["id"] for m in body["models"]} == {llm.model_id, allowed.model_id}
+
+    conv = await _new_conversation(admin)
+    assert dict(await _ask(admin, conv, "Hello!", model=allowed.model_id))["done"]["model"] == allowed.model_id
+    refused = await _post_raw(admin, conv, content="Hello!", model=blocked.model_id)
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "unknown_model"
+    assert blocked.chat_calls == []  # the model that isn't on the list is never called

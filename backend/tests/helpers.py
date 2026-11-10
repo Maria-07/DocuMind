@@ -22,6 +22,10 @@ def make_settings(**overrides: Any) -> Settings:
         "log_json": False,
         "log_level": "WARNING",
         "rate_limit_enabled": False,
+        # Hermetic: API keys in the developer's shell or .env must never leak into tests.
+        "openai_api_key": None,
+        "anthropic_api_key": None,
+        "google_api_key": None,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[call-arg]

@@ -192,7 +192,7 @@ async def test_stream_answer_events_request_and_usage() -> None:
     assert call["model"] == "gpt-5-nano" and call["store"] is False and call["stream"] is True
     assert call["reasoning"] == {"effort": "low"}
     assert '<source id="1"' in call["input"][-1]["content"]
-    assert "cite it with its number" in call["instructions"]
+    assert "add its number in square brackets" in call["instructions"]  # marker citation rules
 
 
 async def test_refusal_and_truncation_stop_reasons() -> None:
@@ -229,14 +229,69 @@ async def test_api_errors_map_to_generation_errors() -> None:
         await collect(llm(failed))
 
 
-async def test_condense_question_and_fallback() -> None:
-    fake = FakeResponses(output_text='"password rotation interval"')
-    model = llm(fake)
-    history = [ChatTurn("user", "passwords?"), ChatTurn("assistant", "They rotate.")]
-    assert await model.condense_question(question="how often?", history=history) == "password rotation interval"
-    assert fake.calls[0]["store"] is False and "stream" not in fake.calls[0]
-    broken = llm(FakeResponses(error=openai.APIConnectionError(request=SimpleNamespace())))  # type: ignore[arg-type]
-    assert await broken.condense_question(question="how often?", history=history) == "how often?"
+async def collect_chat(model: OpenAILLM, history: list[ChatTurn] | None = None) -> list[Any]:
+    return [e async for e in model.stream_chat(question="Hello!", history=history or [])]
+
+
+async def test_stream_chat_is_plain_text_with_the_assistant_prompt() -> None:
+    fake = FakeResponses(
+        [
+            # "[1]" is ordinary text here: a chat reply has no sources, so nothing is parsed as a citation.
+            SimpleNamespace(type="response.output_text.delta", delta="Hey! Option ["),
+            SimpleNamespace(type="response.output_text.delta", delta="1] is fine."),
+            SimpleNamespace(type="response.completed", response=response()),
+        ]
+    )
+    history = [ChatTurn("user", "Passwords?"), ChatTurn("assistant", "Every 90 days [1].")]
+    events = await collect_chat(llm(fake, llm_effort="medium"), history)
+    assert text_of(events) == "Hey! Option [1] is fine."
+    assert not any(isinstance(e, CitationDelta | BlockEnd) for e in events)
+    done = events[-1]
+    assert isinstance(done, GenerationDone) and done.stop_reason == "end_turn"
+    assert done.usage == {"input_tokens": 120, "output_tokens": 40, "reasoning_tokens": 25}
+
+    call = fake.calls[0]
+    assert call["store"] is False and call["stream"] is True
+    assert call["instructions"].startswith("You are DocuMind") and "No document search was done" in call["instructions"]
+    assert call["reasoning"] == {"effort": "low"}  # a conversational reply doesn't need medium reasoning
+    assert call["input"][-1] == {"role": "user", "content": "Hello!"}
+    assert [m["role"] for m in call["input"]] == ["user", "assistant", "user"]
+    assert "<source" not in str(call["input"])
+
+
+async def test_stream_chat_keeps_a_minimal_configured_effort_and_reports_refusals() -> None:
+    fake = FakeResponses(
+        [
+            SimpleNamespace(type="response.refusal.delta", delta="No"),
+            SimpleNamespace(type="response.completed", response=response()),
+        ]
+    )
+    events = await collect_chat(llm(fake, llm_effort="minimal"))
+    assert events[-1].stop_reason == "refusal"
+    assert fake.calls[0]["reasoning"] == {"effort": "minimal"}
+
+
+async def test_stream_chat_maps_api_errors() -> None:
+    req = SimpleNamespace(method="POST", url="https://api.openai.com/v1/responses", headers={})
+    rate = openai.RateLimitError(
+        "slow down",
+        response=SimpleNamespace(status_code=429, request=req, headers={}),  # type: ignore[arg-type]
+        body=None,
+    )
+    with pytest.raises(GenerationError) as exc:
+        await collect_chat(llm(FakeResponses(error=rate)))
+    assert exc.value.code == "llm_rate_limited"
+
+
+async def test_complete_json_effort_override() -> None:
+    fake = FakeResponses(output_text='{"route": "chat", "search_query": ""}')
+    model = llm(fake, llm_effort="high")
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    kwargs: dict[str, Any] = {"system": "s", "prompt": "p", "schema": schema, "name": "route_message"}
+    assert await model.complete_json(**kwargs, effort="low") == {"route": "chat", "search_query": ""}
+    assert fake.calls[0]["reasoning"] == {"effort": "low"} and fake.calls[0]["store"] is False
+    await model.complete_json(**kwargs)
+    assert fake.calls[1]["reasoning"] == {"effort": "high"}  # no override: the configured effort
 
 
 def test_provider_model_mismatch_is_rejected() -> None:
@@ -245,4 +300,5 @@ def test_provider_model_mismatch_is_rejected() -> None:
     with pytest.raises(ValueError, match="LLM_PROVIDER=anthropic"):
         make_settings(llm_provider="anthropic", llm_model="gpt-5-nano")
     assert make_settings(llm_provider="openai", llm_model="gpt-5-nano", openai_api_key="k").llm_configured
-    assert not make_settings(llm_provider="openai", llm_model="gpt-5-nano").llm_configured
+    # Explicitly unset: an OPENAI_API_KEY in the developer's environment must not change the outcome.
+    assert not make_settings(llm_provider="openai", llm_model="gpt-5-nano", openai_api_key=None).llm_configured

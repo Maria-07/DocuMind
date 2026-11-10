@@ -15,3 +15,6 @@ infrastructure/qdrant/snapshots/
 infrastructure/qdrant/.qdrant-initialized
 node_modules/
 .next/
+
+# Upload bundle for the server (infrastructure/lightsail/make-bundle.ps1)
+documind-bundle.tgz

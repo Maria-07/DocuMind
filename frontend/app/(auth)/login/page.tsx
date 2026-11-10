@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useRegistrationOpen } from "@/lib/auth-config";
 
 function safeNext(value: string | null) {
   // Only allow in-app relative paths (no open redirects).
@@ -19,6 +20,7 @@ function safeNext(value: string | null) {
 
 function LoginForm() {
   const { login, status } = useAuth();
+  const registrationOpen = useRegistrationOpen();
   const router = useRouter();
   const next = safeNext(useSearchParams().get("next"));
   const [email, setEmail] = useState("");
@@ -75,12 +77,14 @@ function LoginForm() {
       <Button type="submit" className="h-10 w-full" disabled={pending}>
         {pending && <Loader2 className="animate-spin" />} Sign in
       </Button>
-      <p className="text-center text-sm text-muted-foreground">
-        New organization?{" "}
-        <Link href="/register" className="font-medium text-primary hover:underline">
-          Create a workspace
-        </Link>
-      </p>
+      {registrationOpen && (
+        <p className="text-center text-sm text-muted-foreground">
+          New organization?{" "}
+          <Link href="/register" className="font-medium text-primary hover:underline">
+            Create a workspace
+          </Link>
+        </p>
+      )}
     </form>
   );
 }

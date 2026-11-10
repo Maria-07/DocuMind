@@ -2,7 +2,9 @@
 
 This guide covers running DocuMind with Docker Compose on a single Linux host. That setup suits
 small and mid-sized teams; the [scaling](#scaling) section describes what to change beyond it.
-Commands run from the repository root.
+Commands run from the repository root. To put a demo online with the website on Vercel and the backend on
+AWS Lightsail (including the scripts, costs and safeguards for a public demo), follow
+[deploy-vercel-lightsail.md](deploy-vercel-lightsail.md).
 
 ## Topology
 
@@ -52,7 +54,7 @@ Set these in `.env`:
 | `JWT_SECRET_KEY` | Random, at least 32 characters. The app refuses to start with the example placeholder. |
 | `QDRANT_API_KEY` | Random. Required in production because Qdrant stores document text. |
 | `SITE_ADDRESS` | Your domain (e.g. `docs.example.com`), or `localhost` for a trial run. |
-| `LLM_PROVIDER`, `LLM_MODEL`, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | The chat model. Search and ingestion work without one. |
+| `LLM_PROVIDER`, `LLM_MODEL`, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | The default chat model and the provider keys. Every provider with a key adds its models to the chat model picker. Search and ingestion work without any. To change the offered models or prices, mount your own `models.json` into the backend container and set `LLM_CATALOG_FILE`. |
 | `HSTS_MAX_AGE` | `63072000` once the site runs on its real domain with a valid certificate. |
 
 Compose forces the production settings: `ENVIRONMENT=production`, secure cookies, JSON logs, CORS

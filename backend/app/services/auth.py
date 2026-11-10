@@ -66,6 +66,16 @@ class AuthService:
 
     # --- registration ----------------------------------------------------------------------
     async def register(self, data: RegisterRequest, meta: RequestMeta) -> IssuedTokens:
+        """Public sign-up (can be switched off with REGISTRATION_ENABLED=false)."""
+        if not self.settings.registration_enabled:
+            raise PermissionDeniedError(
+                "Sign-up is closed. Ask an administrator for an account.", code="registration_disabled"
+            )
+        return await self.create_workspace(data, meta)
+
+    async def create_workspace(self, data: RegisterRequest, meta: RequestMeta) -> IssuedTokens:
+        """Create an organization and its first admin. Also the operator path (``app.cli create-admin``),
+        which works while public sign-up is closed."""
         ensure_password_strength(data.password, self.settings)
         email = data.email.lower()
         if await self.users.get_by_email(email) is not None:

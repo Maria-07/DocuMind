@@ -26,11 +26,13 @@ from app.rag.generation.base import (
     SourceDocument,
     TextDelta,
 )
-from app.rag.generation.prompts import ANSWER_SYSTEM_PROMPT, CONDENSE_SYSTEM_PROMPT
+from app.rag.generation.prompts import ANSWER_SYSTEM_PROMPT, ASSISTANT_SYSTEM_PROMPT
 
 log = structlog.get_logger(__name__)
 
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# The server-side refusal fallback exists for these families; Claude Haiku 5.5 has none.
+_FALLBACK_MODELS = ("claude-fable-5", "claude-opus-5", "claude-sonnet-5-5")
 
 
 def _history_messages(history: list[ChatTurn]) -> list[dict[str, Any]]:
@@ -65,10 +67,31 @@ def build_answer_content(question: str, sources: list[SourceDocument]) -> list[d
 
 
 def _usage(usage: Any) -> dict[str, Any]:
+    """Claude reports cache reads/writes *outside* input_tokens; fold them in so input_tokens is the whole prompt."""
     if usage is None:
         return {}
-    fields = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-    return {f: getattr(usage, f, None) for f in fields if getattr(usage, f, None) is not None}
+    read = getattr(usage, "cache_read_input_tokens", None) or 0
+    written = getattr(usage, "cache_creation_input_tokens", None) or 0
+    out: dict[str, Any] = {
+        "input_tokens": (getattr(usage, "input_tokens", None) or 0) + read + written,
+        "output_tokens": getattr(usage, "output_tokens", None) or 0,
+    }
+    if read:
+        out["cache_read_input_tokens"] = read
+    if written:
+        out["cache_creation_input_tokens"] = written
+    return out
+
+
+def _provider_message(exc: Exception) -> str:
+    """The provider's own sentence. The SDK's ``message`` is the whole "Error code: 400 - {...}" string; the clean
+    text is in the error body."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return str(error["message"])
+    return str(getattr(exc, "message", "") or exc)
 
 
 def _to_generation_error(exc: Exception) -> GenerationError:
@@ -77,6 +100,11 @@ def _to_generation_error(exc: Exception) -> GenerationError:
     if isinstance(exc, anthropic.RateLimitError):
         return GenerationError("llm_rate_limited", "The language model is busy; please retry", retryable=True)
     if isinstance(exc, anthropic.BadRequestError):
+        detail = _provider_message(exc)
+        # Spend limits and an empty credit balance arrive as 400s; the provider's own text says when
+        # access returns, which is exactly what the user needs to see.
+        if "usage limit" in detail.lower() or "credit balance" in detail.lower():
+            return GenerationError("llm_quota_exceeded", detail[:240])
         return GenerationError("llm_bad_request", "The language model rejected the request")
     if isinstance(exc, anthropic.APIStatusError) and exc.status_code >= 500:
         return GenerationError("llm_unavailable", "The language model is temporarily unavailable", retryable=True)
@@ -102,7 +130,7 @@ class AnthropicLLM:
     def model_id(self) -> str:
         return self.settings.llm_model
 
-    async def stream_answer(
+    def stream_answer(
         self, *, question: str, sources: list[SourceDocument], history: list[ChatTurn]
     ) -> AsyncIterator[GenerationEvent]:
         s = self.settings
@@ -118,9 +146,24 @@ class AnthropicLLM:
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": "low" if s.llm_effort in ("none", "minimal") else s.llm_effort},
         }
+        return self._stream(kwargs)
+
+    def stream_chat(self, *, question: str, history: list[ChatTurn]) -> AsyncIterator[GenerationEvent]:
+        s = self.settings
+        kwargs: dict[str, Any] = {
+            "model": s.llm_model,
+            "max_tokens": s.llm_max_tokens,
+            "system": [{"type": "text", "text": ASSISTANT_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            "messages": [*_history_messages(history), {"role": "user", "content": question}],
+            "output_config": {"effort": "low"},  # a conversational reply needs little reasoning
+        }
+        return self._stream(kwargs)
+
+    async def _stream(self, kwargs: dict[str, Any]) -> AsyncIterator[GenerationEvent]:
+        s = self.settings
         try:
             manager: Any  # the beta (refusal fallback) and GA stream managers share this interface
-            if s.llm_refusal_fallback:
+            if s.llm_refusal_fallback and s.llm_model.startswith(_FALLBACK_MODELS):
                 manager = self.client.beta.messages.stream(**kwargs, betas=[_FALLBACK_BETA], fallbacks="default")
             else:
                 manager = self.client.messages.stream(**kwargs)
@@ -152,9 +195,19 @@ class AnthropicLLM:
         yield GenerationDone(model=final.model, stop_reason=final.stop_reason, usage=_usage(final.usage))
 
     async def complete_json(
-        self, *, system: str, prompt: str, schema: dict[str, Any], name: str, max_tokens: int = 8000
+        self,
+        *,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        name: str,
+        max_tokens: int = 8000,
+        effort: str | None = None,
+        usage_out: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        effort = "low" if self.settings.llm_effort in ("none", "minimal") else self.settings.llm_effort
+        effort = effort or self.settings.llm_effort
+        if effort in ("none", "minimal"):
+            effort = "low"  # those levels exist for OpenAI only
         try:
             # A plain dict: the SDK's typed overloads lag behind output_config.format.
             request: dict[str, Any] = {
@@ -168,6 +221,8 @@ class AnthropicLLM:
         except anthropic.APIError as exc:
             log.warning("llm_json_failed", task=name, error=type(exc).__name__)
             raise _to_generation_error(exc) from exc
+        if usage_out is not None:
+            usage_out.update(_usage(response.usage))
         if response.stop_reason == "refusal":
             raise GenerationError("llm_refused", "The language model declined this request")
         if response.stop_reason == "max_tokens":
@@ -177,27 +232,3 @@ class AnthropicLLM:
             return json.loads(text)  # type: ignore[no-any-return]
         except json.JSONDecodeError as exc:
             raise GenerationError("llm_invalid_output", "The language model returned invalid JSON") from exc
-
-    async def condense_question(self, *, question: str, history: list[ChatTurn]) -> str:
-        """Rewrite a follow-up ("what about the second one?") into a standalone search query."""
-        transcript = "\n".join(f"{t.role.upper()}: {t.content[:2000]}" for t in history[-6:])
-        try:
-            response = await self.client.messages.create(
-                model=self.settings.llm_model,
-                max_tokens=1024,
-                system=CONDENSE_SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Conversation:\n{transcript}\n\nLatest message: {question}\n\nStandalone query:",
-                    }
-                ],
-                output_config={"effort": "low"},
-            )
-        except anthropic.APIError as exc:
-            log.warning("condense_failed", error=type(exc).__name__)
-            return question  # retrieval with the raw question is a safe fallback
-        if response.stop_reason == "refusal":
-            return question
-        text = "".join(b.text for b in response.content if b.type == "text").strip().strip('"')
-        return text[:1000] or question

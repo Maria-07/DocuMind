@@ -2,7 +2,8 @@
 
     python infrastructure/smoke_test.py https://localhost --insecure
 
-Checks: the app is served with security headers; API docs are off; registration works; a real DOCX
+Checks: the app is served with security headers; API docs are off; registration works (or, with
+--email/--password, signing in to an existing account, for servers where sign-up is closed); a real DOCX
 upload is parsed, chunked, embedded and indexed by the worker; hybrid search finds it; a spoofed
 X-Forwarded-For is sent at registration (CI then asserts the audit log did not record it).
 
@@ -74,6 +75,8 @@ def main() -> None:
     ap.add_argument("--insecure", action="store_true", help="accept a self-signed / internal-CA certificate")
     ap.add_argument("--production", action="store_true", help="also assert production-only hardening")
     ap.add_argument("--index-timeout", type=int, default=1200, help="seconds (first run downloads models)")
+    ap.add_argument("--email", help="sign in with this existing account instead of registering a new one")
+    ap.add_argument("--password", help="password for --email")
     args = ap.parse_args()
     c = Client(args.base_url, args.insecure)
 
@@ -85,15 +88,21 @@ def main() -> None:
         status, _, _ = c.request("GET", "/api/v1/openapi.json")
         check(status == 404, "OpenAPI schema is not exposed in production")
 
-    email = f"smoke-{uuid.uuid4().hex[:8]}@example.com"
-    reg = c.json(
-        "POST",
-        "/api/v1/auth/register",
-        {"email": email, "password": "Smoke-test-pass-1", "full_name": "Smoke Test", "organization_name": "Smoke"},
-        headers={"X-Forwarded-For": "6.6.6.6"},  # must NOT be recorded as the client address
-    )
-    c.token = reg["access_token"]
-    check(bool(c.token), f"registered {email}")
+    if args.email and args.password:
+        session = c.json("POST", "/api/v1/auth/login", {"email": args.email, "password": args.password})
+        c.token = session["access_token"]
+        check(bool(c.token), f"signed in as {args.email}")
+        email = None  # nothing was registered, so there is no audit entry to inspect afterwards
+    else:
+        email = f"smoke-{uuid.uuid4().hex[:8]}@example.com"
+        reg = c.json(
+            "POST",
+            "/api/v1/auth/register",
+            {"email": email, "password": "Smoke-test-pass-1", "full_name": "Smoke Test", "organization_name": "Smoke"},
+            headers={"X-Forwarded-For": "6.6.6.6"},  # must NOT be recorded as the client address
+        )
+        c.token = reg["access_token"]
+        check(bool(c.token), f"registered {email}")
 
     boundary = uuid.uuid4().hex
     docx = build_docx()
@@ -124,7 +133,8 @@ def main() -> None:
 
     hits = c.json("POST", "/api/v1/search/hybrid", {"query": "How long are database backups kept?", "top_k": 5})
     check(any(h["document_id"] == doc_id for h in hits["results"]), "hybrid search finds the uploaded document")
-    print(f"registered_email={email}")
+    if email:
+        print(f"registered_email={email}")
 
 
 if __name__ == "__main__":

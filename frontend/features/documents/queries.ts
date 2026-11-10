@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch, uploadWithProgress } from "@/lib/api";
@@ -82,28 +83,33 @@ export function useCategories() {
   return useQuery({ queryKey: ["categories"], queryFn: () => apiFetch<CategoryRead[]>("categories") });
 }
 
-export function useUploadDocuments() {
+export interface UploadFileInput {
+  file: File;
+  visibility?: DocumentVisibility;
+  categoryId?: string;
+  onProgress: (fraction: number) => void;
+}
+
+/**
+ * Uploads ONE file per request. The dialog runs several in parallel, so a large file never holds
+ * back the others, and each document appears in the list as soon as its own upload is stored.
+ */
+export function useUploadDocument() {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      files,
-      visibility,
-      categoryId,
-      onProgress,
-    }: {
-      files: File[];
-      visibility?: DocumentVisibility;
-      categoryId?: string;
-      onProgress: (fraction: number) => void;
-    }) => {
+  return useCallback(
+    async ({ file, visibility, categoryId, onProgress }: UploadFileInput) => {
       const form = new FormData();
-      for (const f of files) form.append("files", f, f.name);
+      form.append("files", file, file.name);
       if (visibility) form.append("visibility", visibility);
       if (categoryId) form.append("category_id", categoryId);
-      return uploadWithProgress<UploadResponse>("documents/upload", form, onProgress);
+      try {
+        return await uploadWithProgress<UploadResponse>("documents/upload", form, onProgress);
+      } finally {
+        void queryClient.invalidateQueries({ queryKey: ["documents"] });
+      }
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["documents"] }),
-  });
+    [queryClient],
+  );
 }
 
 function useDocumentMutation<V>(fn: (vars: V) => Promise<unknown>) {

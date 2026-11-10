@@ -1,6 +1,7 @@
 # DocuMind — Phase 1: Architecture & Design
 
-> Status: **Draft for approval**. Nothing in this document is implemented yet.
+> Status: **Implemented** (Phases 1–7). This is the original Phase 1 design; "As implemented" notes
+> mark where the build refined it. Section 13 records the questions that were open before implementation.
 > Scope: Enterprise Document Intelligence Platform (upload → index → RAG chat with citations → comparison → analytics → evaluation).
 
 ---
@@ -16,7 +17,7 @@
 | Hybrid search | Qdrant **named dense + sparse (BM25) vectors** on the same point, fused with **RRF** via the Query API | Keyword + semantic in one round trip, one ACL filter, no PG↔Qdrant sync for full-text |
 | Embeddings | Pluggable `EmbeddingProvider`. Default: local `BAAI/bge-base-en-v1.5` via fastembed (768-d); OpenAI/Voyage selectable by config | Runs with zero extra API keys; swap without code changes |
 | Reranking | Pluggable `Reranker`. Default: local cross-encoder `BAAI/bge-reranker-base`; Cohere optional | Large precision gain on top-K at low cost |
-| LLM | Pluggable `LLMProvider`. Default: Anthropic **`claude-opus-5-5`** via the official `anthropic` SDK, streaming, adaptive thinking; OpenAI adapter behind the same interface | Claude's native **Citations** feature ties every citation to a block we supplied → citations cannot reference text we didn't retrieve |
+| LLM | Pluggable `LLMProvider` (OpenAI, Anthropic, Gemini; after Phase 7 several are live at once through a model registry and catalog, see §3.2). Default: Anthropic **`claude-opus-5-5`** via the official `anthropic` SDK, streaming, adaptive thinking; OpenAI adapter behind the same interface | Claude's native **Citations** feature ties every citation to a block we supplied → citations cannot reference text we didn't retrieve |
 | Orchestration | LangChain used where it adds value: loaders/text splitters, prompt templates. Retrieval & generation are thin in-house services | Avoids framework lock-in on the security-critical path (ACL filtering, citation validation) |
 | File storage | `StorageBackend` interface: local volume (dev) / S3-compatible (MinIO/S3 in prod) | Original files never served from a public path |
 | Frontend | Next.js (App Router, TS), Tailwind, shadcn/ui, Lucide, TanStack Query, Recharts | As specified |
@@ -40,7 +41,7 @@
 | **PostgreSQL** | System of record incl. chunk text (so Qdrant can be rebuilt) | Vector search |
 | **Qdrant** | Dense+sparse vectors, payload filters for tenant/ACL/searchability | Being the source of truth for permissions |
 | **Redis** | arq queue, rate-limit counters, stream-cancel flags, short-lived caches | Durable data |
-| **LLM API** (Anthropic / OpenAI) | Answer generation, query condensation, LLM-as-judge in evals | Receiving anything beyond the minimum retrieved context |
+| **LLM API** (Anthropic / OpenAI) | Answer generation, message routing + query rewriting, LLM-as-judge in evals | Receiving anything beyond the minimum retrieved context |
 
 ### 1.2 Architecture diagram
 
@@ -123,7 +124,7 @@ class Reranker(Protocol):
 
 class LLMProvider(Protocol):
     async def stream_grounded_answer(self, req: GroundedRequest) -> AsyncIterator[GenerationEvent]: ...
-    async def complete_json(self, prompt: str, schema: type[BaseModel]) -> BaseModel: ...  # judge, condensation
+    async def complete_json(self, prompt: str, schema: type[BaseModel]) -> BaseModel: ...  # judge, routing
 ```
 
 ---
@@ -206,8 +207,8 @@ sequenceDiagram
   AZ->>PG: conversation belongs to user & org?
   API->>CS: handle(principal, conversation, question, scope)
   CS->>PG: load last N turns
-  CS->>LLM: condense follow-up → standalone query (only if history exists)
-  CS->>CS: route intent: qa | summarize | find_documents | compare
+  CS->>LLM: route message: chat | documents, plus a standalone query for follow-ups (greetings by rule: no call)
+  Note over CS: route = chat → reply streamed with no retrieval or citations
   CS->>RT: retrieve(query, principal, scope)
   RT->>RT: embed query (dense) + BM25 (sparse)
   RT->>QD: Query API: prefetch dense(k=40) + sparse(k=40), fusion=RRF,<br/>filter: org_id ∧ searchable ∧ acl_principals ∈ principal.tokens ∧ scope
@@ -231,6 +232,10 @@ sequenceDiagram
 ```
 
 ### 3.2 Details
+
+> **As implemented (after Phase 7).** Routing has two routes, `chat` and `documents`, and runs before retrieval (`app/rag/routing.py`). Greetings, thanks and goodbyes are matched by rule; anything else is one structured-output call (low effort) that returns the route and, for follow-ups, the standalone query, so it replaces the separate condensation call below. A `chat` reply uses the assistant persona prompt with no document access; a failed or uncertain routing means `documents`. `summarize` and `find_documents` below remain design ideas; comparison is the Compare page.
+
+> **As implemented (after Phase 7): model choice, cost, edits.** `ModelRegistry` (`app/rag/generation/registry.py`) maps a model id to a provider built on demand from the catalog `models.json`; a model is offered when its provider's key is configured, and an unknown id is rejected before anything is stored. Providers report usage in one shape (`input_tokens` is the whole prompt; cache reads/writes and reasoning tokens are separate counters; for Gemini thinking tokens are added to output), so `usage_cost()` is provider-independent; the routing call's usage is merged into the reply's total and the result is stored on the message, priced as of that day. Gemini uses Google's OpenAI-compatible endpoint through the existing `openai` SDK. Editing a user message marks it and every later message `superseded_at` (kept, hidden, excluded from context) and the replacement carries `edit_of`.
 
 **Query condensation.** Follow-ups ("what about the second one?") are rewritten into a standalone query using the last few turns. The original question is still what the user sees and what goes to the final answer prompt.
 
@@ -619,7 +624,7 @@ Docker Compose services: `frontend`, `backend`, `worker`, `postgres`, `qdrant`, 
 
 **Runner.** arq job iterates cases with bounded concurrency, uses the **same retrieval/generation code path** as chat (with a synthetic principal scoped to the dataset's documents), stores per-case results and aggregates, and compares to a baseline run. A CLI (`python -m app.rag.evaluation.run --dataset … --fail-under ndcg=0.70 --max-drop 0.03`) enables CI regression gating when embedding model, chunking, retrieval config, prompts or LLM change. The dashboard shows metric trends per config and per-case diffs (regressions highlighted).
 
-> **As implemented (Phase 6).** Cases are evaluated sequentially as the user who started the run (so permissions apply exactly as in chat). The CLI is `python -m app.cli evaluate --dataset … [--baseline …] [--fail-under metric=value] [--max-drop 0.05]`. The baseline defaults to the dataset's previous completed run; `hallucination_rate` and latency are lower-is-better, latency is reported but never gated. Citation accuracy is measured deterministically (cited chunk ∈ relevant chunks, or relevant documents when no evidence quote is given); the judge returns faithfulness/hallucination, answer and context relevance, correctness and abstention with a stored rationale (`judge-v1`). The UI covers datasets, cases (form or JSON import), runs with per-case answers/citations/rationale, baseline deltas and a metric trend.
+> **As implemented (Phase 6).** Cases are evaluated sequentially as the user who started the run (so permissions apply exactly as in chat). The CLI is `python -m app.cli evaluate --dataset … [--baseline …] [--fail-under metric=value] [--max-drop 0.05]`. The baseline defaults to the dataset's previous completed run; `hallucination_rate` and latency are lower-is-better, latency is reported but never gated. Citation accuracy is measured deterministically (cited chunk ∈ relevant chunks, or relevant documents when no evidence quote is given); the judge returns faithfulness/hallucination, answer and context relevance, correctness and abstention with a stored rationale (`judge-v2`: same output schema as v1; the rubric now ignores friendly wording and defines the 1-5 scales). The UI covers datasets, cases (form or JSON import), runs with per-case answers/citations/rationale, baseline deltas and a metric trend.
 
 ---
 

@@ -129,26 +129,44 @@ export async function apiFetch<T = unknown>(path: string, options: RequestOption
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
-/** Multipart upload with progress (fetch has no upload progress events). */
+const RATE_LIMIT_RETRIES = 3;
+const MAX_RETRY_WAIT_SECONDS = 60;
+
+/** Multipart upload with progress (fetch has no upload progress events).
+ *
+ * A 429 (upload rate limit) is retried after the server's Retry-After, so a large batch of
+ * one-file requests slows down instead of failing.
+ */
 export function uploadWithProgress<T>(
   path: string,
   form: FormData,
   onProgress: (fraction: number) => void,
 ): Promise<T> {
   const attempt = (token: string | null) =>
-    new Promise<{ status: number; body: string }>((resolve, reject) => {
+    new Promise<{ status: number; body: string; retryAfter: number }>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${API}/${path}`);
       xhr.withCredentials = true;
       if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
       xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-      xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+      xhr.onload = () =>
+        resolve({
+          status: xhr.status,
+          body: xhr.responseText,
+          retryAfter: Number(xhr.getResponseHeader("Retry-After")) || 5,
+        });
       xhr.onerror = () => reject(new ApiError(0, "network_error", "Network error during upload"));
       xhr.send(form);
     });
 
   return (async () => {
     let result = await attempt(accessToken);
+    for (let retry = 0; result.status === 429 && retry < RATE_LIMIT_RETRIES; retry++) {
+      onProgress(0);
+      const waitSeconds = Math.min(result.retryAfter, MAX_RETRY_WAIT_SECONDS);
+      await new Promise((r) => setTimeout(r, waitSeconds * 1000));
+      result = await attempt(accessToken);
+    }
     if (result.status === 401) {
       const token = await refreshAccessToken();
       if (!token) {

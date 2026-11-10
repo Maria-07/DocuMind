@@ -6,6 +6,8 @@ import { ArrowUp, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
+import { ModelPicker } from "./model-picker";
+
 export function Composer({
   onSend,
   onStop,
@@ -27,7 +29,7 @@ export function Composer({
   };
   return (
     <form
-      className="relative rounded-2xl border bg-card shadow-sm focus-within:ring-3 focus-within:ring-ring/30"
+      className="rounded-2xl border bg-card shadow-sm focus-within:ring-3 focus-within:ring-ring/30"
       onSubmit={(e) => {
         e.preventDefault();
         submit();
@@ -47,9 +49,10 @@ export function Composer({
         aria-label="Message"
         maxLength={4000}
         rows={2}
-        className="max-h-48 min-h-14 resize-none border-0 bg-transparent px-4 py-3 pr-14 shadow-none focus-visible:ring-0"
+        className="max-h-48 min-h-14 resize-none border-0 bg-transparent px-4 py-3 shadow-none focus-visible:ring-0"
       />
-      <div className="absolute right-2 bottom-2">
+      <div className="flex items-center justify-between gap-2 px-2 pb-2">
+        <ModelPicker disabled={streaming} />
         {streaming ? (
           <Button type="button" size="icon" variant="secondary" onClick={onStop} aria-label="Stop generating">
             <Square className="fill-current" />
