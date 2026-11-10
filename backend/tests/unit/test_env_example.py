@@ -29,3 +29,12 @@ def test_every_value_is_valid_for_its_setting() -> None:
     assert settings.chat_model_id_list == []  # empty = every model with a key
     assert settings.registration_enabled is True  # the example keeps today's behaviour; the deploy script closes it
     assert settings.llm_router_model is None and settings.llm_catalog_file is None and settings.eval_judge_model is None
+
+
+def test_blank_optional_settings_mean_unset(monkeypatch) -> None:
+    """docker compose hands an empty `.env` entry to the container as ''; that must not become Path('.')."""
+    from tests.helpers import make_settings
+
+    settings = make_settings(llm_catalog_file="", llm_router_model="")
+    assert settings.llm_catalog_file is None
+    assert settings.llm_router_model is None

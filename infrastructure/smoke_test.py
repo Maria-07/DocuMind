@@ -36,6 +36,9 @@ def build_docx() -> bytes:
     return buf.getvalue()
 
 
+# The first search downloads the query model (about 1.5 GB on a fresh server), so allow minutes.
+REQUEST_TIMEOUT = 600
+
 class Client:
     def __init__(self, base: str, insecure: bool) -> None:
         self.base = base.rstrip("/")
@@ -50,7 +53,7 @@ class Client:
             hdrs["Authorization"] = f"Bearer {self.token}"
         req = urllib.request.Request(self.base + path, data=body, method=method, headers=hdrs)  # noqa: S310
         try:
-            with urllib.request.urlopen(req, context=self.ctx, timeout=60) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, context=self.ctx, timeout=REQUEST_TIMEOUT) as resp:  # noqa: S310
                 return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
         except urllib.error.HTTPError as e:
             return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()

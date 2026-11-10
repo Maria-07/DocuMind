@@ -147,6 +147,12 @@ class Settings(BaseSettings):
     rate_limit_upload_per_minute: int = 60  # upload requests; the UI sends one file per request
     rate_limit_default_per_minute: int = 300
 
+    @field_validator("llm_catalog_file", "llm_router_model", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, v: object) -> object:
+        # docker compose passes an unset `.env` entry as "", and Path("") is the current directory.
+        return None if isinstance(v, str) and not v.strip() else v
+
     @field_validator("jwt_secret_key")
     @classmethod
     def _secret_long_enough(cls, v: SecretStr) -> SecretStr:
