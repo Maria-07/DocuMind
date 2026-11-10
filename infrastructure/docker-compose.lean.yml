@@ -1,0 +1,11 @@
+# Memory caps for a 1 GB server (Lightsail $7 plan), added by `deploy.sh <host> --lean`.
+# Measured on the real stack: about 870 MB in total with the settings deploy.sh --lean writes.
+# memswap_limit lets the kernel push idle model weights out to the swap file (bootstrap-host.sh makes 4 GB).
+services:
+  backend:  { mem_limit: 300m, memswap_limit: 4g }
+  worker:   { mem_limit: 330m, memswap_limit: 4g }
+  frontend: { mem_limit: 80m,  memswap_limit: 1g }
+  qdrant:   { mem_limit: 70m,  memswap_limit: 1g }
+  postgres: { mem_limit: 45m,  memswap_limit: 1g }
+  caddy:    { mem_limit: 25m,  memswap_limit: 512m }
+  redis:    { mem_limit: 15m,  memswap_limit: 512m }

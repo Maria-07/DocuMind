@@ -3,6 +3,7 @@
 #
 #   bash infrastructure/lightsail/deploy.sh <hostname>          # e.g. documind-api.duckdns.org
 #   bash infrastructure/lightsail/deploy.sh <hostname> --smoke  # also run the end-to-end smoke test
+#   bash infrastructure/lightsail/deploy.sh <hostname> --lean   # fit a 1 GB server (smaller search model, no reranker)
 #
 # First run: creates .env with fresh random secrets and demo-safe defaults (sign-up closed, cheap models
 # only), asks for your LLM API key(s), builds and starts everything, and offers to create the first admin.
@@ -13,9 +14,16 @@ set -euo pipefail
 
 HOST="${1:-}"
 SMOKE="no"
-[ "${2:-}" = "--smoke" ] && SMOKE="yes"
+LEAN="no"
+for arg in "${@:2}"; do
+  case "$arg" in
+    --smoke) SMOKE="yes" ;;
+    --lean) LEAN="yes" ;;
+    *) echo "Unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
 if [ -z "$HOST" ] || [ "${HOST#-}" != "$HOST" ]; then
-  echo "Usage: bash $0 <public hostname, e.g. documind-api.duckdns.org> [--smoke]" >&2
+  echo "Usage: bash $0 <public hostname, e.g. documind-api.duckdns.org> [--smoke] [--lean]" >&2
   exit 1
 fi
 
@@ -64,6 +72,16 @@ if [ ! -f .env ]; then
 fi
 chmod 600 .env
 set_env SITE_ADDRESS "$HOST"
+
+# --lean is remembered in .env, so later updates keep the same settings.
+[ "$LEAN" = "yes" ] && set_env DOCUMIND_LEAN true
+if grep -Eq "^DOCUMIND_LEAN=true" .env; then
+  echo "==> Lean mode: small search model, no reranker, memory caps for a 1 GB server"
+  set_env EMBEDDING_MODEL BAAI/bge-small-en-v1.5
+  set_env RERANKER_ENABLED false
+  set_env WORKER_MAX_JOBS 1
+  COMPOSE+=(-f infrastructure/docker-compose.lean.yml)
+fi
 
 if ! has_value OPENAI_API_KEY && ! has_value GOOGLE_API_KEY && ! has_value ANTHROPIC_API_KEY; then
   echo "==> LLM API keys (typed input is hidden; press Enter to skip one)"

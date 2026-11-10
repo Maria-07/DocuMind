@@ -24,7 +24,7 @@ tell you what.
 
 | | |
 |---|---|
-| Lightsail server | **$24 per month** for the 4 GB / 2 vCPU / 80 GB plan ([pricing](https://aws.amazon.com/lightsail/pricing/)). **The small plans do not work**: 512 MB ($5), 1 GB ($7) and 2 GB ($12) cannot hold the AI models, and even building the Docker images runs out of memory. AWS bills by the hour up to the monthly price, so a 3-day demo costs a few dollars. |
+| Lightsail server | **$24 per month** for the 4 GB / 2 vCPU / 80 GB plan ([pricing](https://aws.amazon.com/lightsail/pricing/)), the tested default. **512 MB ($5) cannot work.** **1 GB ($7) and 2 GB ($12) work in lean mode** (`deploy.sh HOST --lean`, section 5): a smaller search model and no reranker, about 870 MB in total. Lean mode ran on a Windows PC with those memory caps, not yet on a real 1 GB server; the first Docker build may be slow or need the swap file. AWS bills by the hour up to the monthly price, so a 3-day demo costs a few dollars. |
 | Static IP | Included while attached to the instance. **Release it when you delete the instance**: an unattached one is billed. |
 | Vercel | Free Hobby plan. It is limited to non-commercial, personal use ([terms](https://vercel.com/docs/plans/hobby)): fine for a portfolio, borderline for paid client work. |
 | Host name | A free `duckdns.org` name, or any domain you own. |
@@ -86,7 +86,8 @@ Reconnect and deploy:
 
 ```bash
 cd documind
-bash infrastructure/lightsail/deploy.sh HOST --smoke
+bash infrastructure/lightsail/deploy.sh HOST --smoke          # 4 GB plan
+bash infrastructure/lightsail/deploy.sh HOST --smoke --lean   # 1-2 GB plan (remembered for later updates)
 ```
 
 The script:
