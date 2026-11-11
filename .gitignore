@@ -18,3 +18,7 @@ node_modules/
 
 # Upload bundle for the server (infrastructure/lightsail/make-bundle.ps1)
 documind-bundle.tgz
+
+# Server access details and SSH keys: never commit
+serverDetails/
+*.pem
