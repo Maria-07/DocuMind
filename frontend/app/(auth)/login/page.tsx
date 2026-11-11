@@ -18,13 +18,19 @@ function safeNext(value: string | null) {
   return value && value.startsWith("/") && !value.startsWith("//") ? value : "/";
 }
 
+// Optional demo account, set per deployment (Vercel env vars, never in the repository). When both are set the
+// form is pre-filled and says so. Anyone who opens the page can read them, so use a low-privilege account.
+const DEMO_EMAIL = process.env.NEXT_PUBLIC_DEMO_EMAIL ?? "";
+const DEMO_PASSWORD = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "";
+const DEMO = Boolean(DEMO_EMAIL && DEMO_PASSWORD);
+
 function LoginForm() {
   const { login, status } = useAuth();
   const registrationOpen = useRegistrationOpen();
   const router = useRouter();
   const next = safeNext(useSearchParams().get("next"));
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(DEMO ? DEMO_EMAIL : "");
+  const [password, setPassword] = useState(DEMO ? DEMO_PASSWORD : "");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -52,6 +58,11 @@ function LoginForm() {
         <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
         <p className="text-sm text-muted-foreground">Welcome back. Sign in to your workspace.</p>
       </div>
+      {DEMO && (
+        <Alert>
+          <AlertDescription>Demo account: the sign-in details are filled in. Just press Sign in.</AlertDescription>
+        </Alert>
+      )}
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
