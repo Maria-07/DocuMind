@@ -22,3 +22,5 @@ documind-bundle.tgz
 # Server access details and SSH keys: never commit
 serverDetails/
 *.pem
+
+.vercel
