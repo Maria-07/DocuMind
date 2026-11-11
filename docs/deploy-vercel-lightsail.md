@@ -133,6 +133,13 @@ Things to know about this setup:
   For a demo this is fine; if people get "too many requests", raise `RATE_LIMIT_AUTH_PER_MINUTE` in `.env`.
 - **Large uploads**: Vercel documents a 4.5 MB request limit for its functions, but uploads of 3, 6 and 12 MB
   went through the proxied `/api` path intact in a real test, so it does not apply here.
+- **Pre-filled demo login (optional)**: set `NEXT_PUBLIC_DEMO_EMAIL` and `NEXT_PUBLIC_DEMO_PASSWORD` in the Vercel
+  project (Production, type `config`) and redeploy: the sign-in form is then filled in, so a client just presses
+  *Sign in*. Everyone who opens the page can read these values, so give them a low-privilege member account, not an
+  admin, and never put them in the repository.
+- **"Blocked: the commit author doesn't have permission"**: Vercel checks the git author of the folder you deploy.
+  If your GitHub user is not a member of the Vercel team, deploy a copy of `frontend/` that is outside the git
+  repository (keep its `.vercel` folder): `npx vercel --prod --yes` from there has no commit author to check.
 - If Vercel shows a login wall, switch off **Deployment Protection** for production in the project settings.
 
 ## 7. Updating later
