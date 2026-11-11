@@ -44,3 +44,5 @@ next-env.d.ts
 /e2e/.fixtures/
 /test-results/
 /playwright-report/
+.vercel
+.env*

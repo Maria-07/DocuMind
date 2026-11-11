@@ -50,6 +50,8 @@ Caddy gets a free HTTPS certificate automatically, but only for a real host name
 2. Set its **current ip** to `SERVER-IP`.
 3. Check from your PC: `nslookup documind-api.duckdns.org` should print `SERVER-IP`.
 
+No sign-up wanted? Use `<IP with dashes>.sslip.io`, e.g. `13-206-205-159.sslip.io` for `13.206.205.159`: it resolves to that IP and Caddy can get a real certificate for it (this is what the tested deployment used).
+
 The host name is then `documind-api.duckdns.org` (`HOST` below). Use your own domain instead if you have one:
 create an `A` record pointing at `SERVER-IP`.
 
@@ -129,9 +131,8 @@ Things to know about this setup:
 - **Visitors share one IP address** as far as the server can tell: it sees Vercel's servers, not the visitor.
   The per-IP login limit (10 a minute) is therefore shared by everyone. The per-account limit still works.
   For a demo this is fine; if people get "too many requests", raise `RATE_LIMIT_AUTH_PER_MINUTE` in `.env`.
-- **Large uploads**: Vercel documents a 4.5 MB request limit for its functions but does not say whether it
-  applies to proxied `/api` calls. If uploading a bigger file through the Vercel address fails, upload through
-  `https://HOST` instead, or use small files for the demo.
+- **Large uploads**: Vercel documents a 4.5 MB request limit for its functions, but uploads of 3, 6 and 12 MB
+  went through the proxied `/api` path intact in a real test, so it does not apply here.
 - If Vercel shows a login wall, switch off **Deployment Protection** for production in the project settings.
 
 ## 7. Updating later
