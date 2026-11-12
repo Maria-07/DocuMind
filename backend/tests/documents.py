@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import docx
 import openpyxl
@@ -111,3 +112,127 @@ def write(tmp: Path, name: str, data: bytes) -> Path:
     path = tmp / name
     path.write_bytes(data)
     return path
+
+
+# --- documents with hyperlinks -------------------------------------------------------------------
+
+GITHUB = "https://github.com/jane-doe"
+LINKEDIN = "https://www.linkedin.com/in/jane-doe"
+PORTFOLIO = "https://janedoe.dev"
+REPO = "https://github.com/jane-doe/docu-search"
+
+
+def build_pdf_with_links() -> bytes:
+    """A two-page resume: links hidden behind anchor text (annotations) plus a URL written as text."""
+    pdf = FPDF()
+    pdf.set_title("Jane Doe Resume")
+    pdf.set_font("Helvetica", size=11)
+    pdf.add_page()
+    pdf.multi_cell(0, 6, "Jane Doe. Senior software engineer building search and data platforms.")
+    pdf.ln(2)
+    pdf.write(6, "Code: ")
+    pdf.write(6, "GitHub Profile", link=GITHUB)
+    pdf.write(6, "  Network: ")
+    pdf.write(6, "LinkedIn", link=LINKEDIN)
+    pdf.ln(8)
+    pdf.multi_cell(0, 6, "Docs for my talks are at https://talks.example.org/jane. Thanks for reading.")
+    pdf.add_page()
+    pdf.multi_cell(0, 6, "Projects. Built a document search engine used by three teams.")
+    pdf.ln(2)
+    pdf.write(6, "Project Repository", link=REPO)
+    pdf.ln(8)
+    pdf.write(6, "Personal Portfolio", link=PORTFOLIO)
+    return bytes(pdf.output())
+
+
+def _add_hyperlink(paragraph: Any, url: str, text: str) -> None:
+    from docx.opc.constants import RELATIONSHIP_TYPE
+    from docx.oxml.shared import OxmlElement, qn
+
+    rid = paragraph.part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    link = OxmlElement("w:hyperlink")
+    link.set(qn("r:id"), rid)
+    run = OxmlElement("w:r")
+    t = OxmlElement("w:t")
+    t.text = text
+    run.append(t)
+    link.append(run)
+    paragraph._p.append(link)
+
+
+def _add_field_hyperlink(paragraph: Any, url: str, text: str) -> None:
+    """A HYPERLINK field code (how some tools write links) instead of a w:hyperlink element."""
+    from docx.oxml.shared import OxmlElement, qn
+
+    def run_with(child: Any) -> None:
+        r = OxmlElement("w:r")
+        r.append(child)
+        paragraph._p.append(r)
+
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    run_with(begin)
+    instr = OxmlElement("w:instrText")
+    instr.text = f' HYPERLINK "{url}" '
+    run_with(instr)
+    sep = OxmlElement("w:fldChar")
+    sep.set(qn("w:fldCharType"), "separate")
+    run_with(sep)
+    t = OxmlElement("w:t")
+    t.text = text
+    run_with(t)
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run_with(end)
+
+
+def build_docx_with_links() -> bytes:
+    d = docx.Document()
+    d.core_properties.title = "Jane Doe CV"
+    d.add_heading("Jane Doe", level=0)
+    d.add_heading("Contact", level=1)
+    p = d.add_paragraph("Find my code on ")
+    _add_hyperlink(p, GITHUB, "GitHub Profile")
+    p.add_run(" and my network on ")
+    _add_hyperlink(p, LINKEDIN, "LinkedIn")
+    p.add_run(".")
+    d.add_paragraph("Blog: www.janedoe.dev/blog for long reads.")
+    d.add_heading("Portfolio", level=1)
+    _add_field_hyperlink(d.add_paragraph(), PORTFOLIO, "Personal Portfolio")
+    table = d.add_table(rows=2, cols=2)
+    table.cell(0, 0).text, table.cell(0, 1).text = "Project", "Link"
+    table.cell(1, 0).text = "Docu Search"
+    _add_hyperlink(table.cell(1, 1).paragraphs[0], REPO, "Project Repository")
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def build_xlsx_with_links() -> bytes:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "People"
+    ws.append(["Name", "Profile", "Network"])
+    ws.append(["Jane Doe", "GitHub", None])
+    ws["B2"].hyperlink = GITHUB
+    ws["C2"] = f'=HYPERLINK("{LINKEDIN}","LinkedIn")'
+    sites = wb.create_sheet("Sites")
+    sites.append(["Site", "Note"])
+    sites.append([PORTFOLIO + "/about", "written out"])
+    sites.append(["Project Repository", "linked"])
+    sites["A3"].hyperlink = REPO
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def build_xls_with_url() -> bytes:
+    wb = xlwt.Workbook()
+    ws = wb.add_sheet("Contacts")
+    ws.write(0, 0, "Name")
+    ws.write(0, 1, "Website")
+    ws.write(1, 0, "Jane Doe")
+    ws.write(1, 1, PORTFOLIO)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

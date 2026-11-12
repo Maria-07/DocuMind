@@ -10,8 +10,9 @@ from typing import Any
 import pdfplumber
 from pdfminer.pdfdocument import PDFEncryptionError, PDFPasswordIncorrect
 
+from app.rag.ingestion.links import dedupe, hidden_targets_note, make_link, shown_in, text_links
 from app.rag.ingestion.parsers.common import clean_text, rows_to_markdown
-from app.rag.ingestion.types import Block, ParsedDocument, PermanentIngestionError
+from app.rag.ingestion.types import Block, ExtractedLink, ParsedDocument, PermanentIngestionError
 
 # Pages with less extractable text than this are probably scanned images.
 _LOW_TEXT_CHARS = 25
@@ -55,6 +56,30 @@ def _is_encryption_error(exc: BaseException) -> bool:
     return False
 
 
+_ANCHOR_SLACK = 2.0  # points: words whose centre is this close to a link box belong to it
+
+
+def _page_links(page: Any, number: int) -> list[ExtractedLink]:
+    """Link annotations (URI actions) on a page, with the words under each link box as anchor text."""
+    annotations = page.hyperlinks
+    if not annotations:
+        return []
+    words = page.extract_words()
+    links: list[ExtractedLink] = []
+    for annot in annotations:
+        x0, x1, top, bottom = annot["x0"], annot["x1"], annot["top"], annot["bottom"]
+        anchor = " ".join(
+            w["text"]
+            for w in words
+            if x0 - _ANCHOR_SLACK <= (w["x0"] + w["x1"]) / 2 <= x1 + _ANCHOR_SLACK
+            and top - _ANCHOR_SLACK <= (w["top"] + w["bottom"]) / 2 <= bottom + _ANCHOR_SLACK
+        )
+        link = make_link(annot.get("uri"), anchor=anchor, embedded=True, page=number)
+        if link is not None:
+            links.append(link)
+    return links
+
+
 def parse_pdf(path: Path, *, max_pages: int) -> ParsedDocument:
     try:
         return _parse(path, max_pages)
@@ -70,6 +95,7 @@ def _parse(path: Path, max_pages: int) -> ParsedDocument:
     blocks: list[Block] = []
     warnings: list[str] = []
     low_text_pages: list[int] = []
+    links: list[ExtractedLink] = []
 
     with pdfplumber.open(path) as pdf:
         info = pdf.metadata or {}
@@ -96,22 +122,32 @@ def _parse(path: Path, max_pages: int) -> ParsedDocument:
                     text_page = text_page.outside_bbox(table.bbox, strict=False)
                 text = clean_text(text_page.extract_text() or "")
                 table_rows = [t.extract() for t in tables]
+                embedded = _page_links(page, number)
             except Exception:  # one broken page must not sink the whole document
                 warnings.append(f"Page {number} could not be parsed")
                 continue
             finally:
                 page.flush_cache()  # pdfplumber caches layout objects per page; free them
 
-            if text:
-                blocks.append(Block(kind="text", text=text, page=number))
-            for rows in table_rows:
-                markdown = rows_to_markdown(rows)
-                if markdown:
-                    blocks.append(Block(kind="table", text=markdown, page=number))
+            markdowns = [m for m in (rows_to_markdown(rows) for rows in table_rows) if m]
+            visible = "\n".join([text, *markdowns])
+            page_links = dedupe(embedded + text_links(visible, page=number))
+            links.extend(page_links)
+            # Link targets hidden behind text ("GitHub Profile") become part of the page's indexed text, so
+            # search finds them and answers can quote and cite the exact URL.
+            hidden = [lk for lk in page_links if not shown_in(lk.url, visible)]
+            note = hidden_targets_note(hidden, "Links on this page:")
+            page_text = f"{text}\n\n{note}" if text and note else text or note
+            if page_text:
+                blocks.append(Block(kind="text", text=page_text, page=number))
+            for markdown in markdowns:
+                blocks.append(Block(kind="table", text=markdown, page=number))
             if len(text) < _LOW_TEXT_CHARS and not any(table_rows):
                 low_text_pages.append(number)
 
     if low_text_pages:
         shown = ", ".join(map(str, low_text_pages[:20])) + ("…" if len(low_text_pages) > 20 else "")
         warnings.append(f"{len(low_text_pages)} page(s) have little or no extractable text (scanned?): {shown}")
-    return ParsedDocument(blocks=blocks, metadata=metadata, page_count=page_count, warnings=warnings)
+    return ParsedDocument(
+        blocks=blocks, metadata=metadata, page_count=page_count, warnings=warnings, links=dedupe(links)
+    )

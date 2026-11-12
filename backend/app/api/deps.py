@@ -21,6 +21,7 @@ from app.schemas.organization import OrganizationSettings
 from app.services.audit import RequestMeta
 from app.services.chat import ChatService
 from app.services.documents import DocumentService
+from app.services.links import LinkService
 from app.services.search import SearchService
 
 _bearer = HTTPBearer(auto_error=False, description="Access token from /auth/login or /auth/refresh")
@@ -166,3 +167,11 @@ def get_search_service(resources: Resources) -> SearchService:
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 SearchServiceDep = Annotated[SearchService, Depends(get_search_service)]
+
+
+def get_link_service(resources: Resources) -> LinkService:
+    # Plain SQL: works even when the RAG runtime (embeddings, LLM) is not configured.
+    return LinkService(resources.sessionmaker)
+
+
+LinkServiceDep = Annotated[LinkService, Depends(get_link_service)]

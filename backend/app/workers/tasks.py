@@ -8,9 +8,9 @@ from typing import Any
 
 import structlog
 from arq import Retry
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
-from app.models import Document, DocumentPermission, EmbeddingConfig, IngestionJob
+from app.models import Document, DocumentLink, DocumentPermission, EmbeddingConfig, IngestionJob
 from app.models.enums import JobStatus
 from app.rag.ingestion.pipeline import IngestionPipeline, RetryLater
 from app.rag.vectorstore import QdrantVectorStore
@@ -60,7 +60,7 @@ async def sync_document_payload(ctx: dict[str, Any], document_id: str) -> str:
 
 
 async def purge_document(ctx: dict[str, Any], document_id: str) -> str:
-    """Remove the stored file, chunks' vectors (all collections) of a soft-deleted document. Idempotent."""
+    """Remove the stored file, vectors (all collections) and links of a soft-deleted document. Idempotent."""
     store: QdrantVectorStore = ctx["store"]
     doc_uuid = uuid.UUID(document_id)
     async with ctx["sessionmaker"]() as session:
@@ -76,6 +76,8 @@ async def purge_document(ctx: dict[str, Any], document_id: str) -> str:
 
         await store.delete_document_everywhere(doc_uuid)
         await ctx["storage"].delete(document.storage_key)
+        # The document's extracted links go with its content.
+        await session.execute(delete(DocumentLink).where(DocumentLink.document_id == doc_uuid))
         document.purged_at = datetime.now(UTC)
         await session.commit()
 

@@ -7,7 +7,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import CurrentPrincipal, DocumentServiceDep, Meta, rate_limit_by_user
+from app.api.deps import CurrentPrincipal, DocumentServiceDep, LinkServiceDep, Meta, rate_limit_by_user
 from app.models.enums import DocumentVisibility
 from app.schemas.common import ERROR_RESPONSES, Page, PageParams
 from app.schemas.document import (
@@ -23,7 +23,9 @@ from app.schemas.document import (
     PermissionsUpdate,
     UploadResponse,
 )
+from app.schemas.links import DocumentLinksResponse
 from app.services.documents import DownloadHandle
+from app.services.links import to_link_read
 
 router = APIRouter(prefix="/documents", tags=["documents"], responses=ERROR_RESPONSES)
 
@@ -124,6 +126,24 @@ async def list_document_chunks(
         total=total,
         page=page.page,
         page_size=page.page_size,
+    )
+
+
+@router.get(
+    "/{document_id}/links",
+    response_model=DocumentLinksResponse,
+    summary="Hyperlinks found in the document (exact targets, with page / sheet + cell / section)",
+)
+async def list_document_links(
+    document_id: uuid.UUID, principal: CurrentPrincipal, service: DocumentServiceDep, links: LinkServiceDep
+) -> DocumentLinksResponse:
+    document = await service.get_visible(principal, document_id)
+    hits = await links.for_document(principal, document.id)
+    return DocumentLinksResponse(
+        document_id=document.id,
+        index_version=document.active_index_version,
+        items=[to_link_read(h) for h in hits],
+        total=len(hits),
     )
 
 

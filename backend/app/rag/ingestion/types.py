@@ -22,6 +22,27 @@ class Block:
     rows: list[tuple[int, str]] = field(default_factory=list)
 
 
+LinkType = Literal["hyperlink", "url", "email"]
+
+
+@dataclass(slots=True)
+class ExtractedLink:
+    """A link found in a document, with where it was found.
+
+    ``link_type``: ``hyperlink`` — the target is hidden behind other text (a PDF link annotation, a
+    Word hyperlink, an Excel cell link or HYPERLINK formula); ``url`` — the URL is written out as
+    visible text; ``email`` — a ``mailto:`` link.
+    """
+
+    url: str
+    link_type: LinkType
+    anchor_text: str | None = None
+    page: int | None = None
+    sheet: str | None = None
+    cell: str | None = None  # "B7"
+    section_path: str | None = None
+
+
 @dataclass(slots=True)
 class ParsedDocument:
     blocks: list[Block]
@@ -29,6 +50,7 @@ class ParsedDocument:
     page_count: int | None = None
     sheet_names: list[str] | None = None
     warnings: list[str] = field(default_factory=list)
+    links: list[ExtractedLink] = field(default_factory=list)
 
 
 class IngestionError(Exception):

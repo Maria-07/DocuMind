@@ -34,12 +34,14 @@ from app.core.permissions import Principal
 from app.models import Conversation, Message, MessageCitation
 from app.rag.answering import (
     NO_ANSWER_TEXT,
+    NO_LINK_TEXT,
     REFUSAL_TEXT,
     AnswerToken,
     Citation,
     CitationTracker,
     NewCitation,
     to_source_documents,
+    unverified_urls,
 )
 from app.rag.generation.base import ChatTurn, GenerationDone, GenerationError, TextDelta
 from app.rag.generation.catalog import merge_usage, today
@@ -58,6 +60,7 @@ from app.schemas.chat import (
     SourceRead,
 )
 from app.schemas.common import PageParams
+from app.services.links import LinkService, detect_link_query, link_sources
 from app.services.search import log_retrieval
 
 log = structlog.get_logger(__name__)
@@ -191,6 +194,7 @@ class ChatService:
         self.sessionmaker = sessionmaker
         self.settings = settings
         self.rag = rag
+        self.links = LinkService(sessionmaker)
 
     # =======================================================================================
     # Conversations
@@ -434,6 +438,17 @@ class ChatService:
                 usage_out=routing_usage,
             )
             route = decision.route
+            # Links are looked up exactly (PostgreSQL), next to vector retrieval: "What is the GitHub link?"
+            link_query = detect_link_query(decision.query) or detect_link_query(ask.question)
+            link_hits = []
+            if link_query is not None and decision.source != "rule":  # "Thanks for the link!" stays small talk
+                # A question the router sent to chat ("What's a good website for learning Python?") only
+                # becomes a document question if links match it specifically, not via the all-links fallback.
+                link_hits = await self.links.lookup(
+                    ask.principal, link_query, filters=ask.filters, fallback=route is not Route.CHAT
+                )
+            if route is Route.CHAT and link_hits:
+                route = Route.DOCUMENTS  # the user's documents do contain matching links
 
             if route is Route.CHAT:
                 yield ChatEvent("status", {"stage": "generating"})
@@ -456,19 +471,19 @@ class ChatService:
                 await log_retrieval(
                     self.sessionmaker, ask.principal, result, source="chat", message_id=ask.assistant_message_id
                 )
+                # Matched links first (exact targets with locations), then the retrieved passages.
+                chunks = link_sources(link_hits) + result.chunks
 
-                if not result.chunks:
-                    content = NO_ANSWER_TEXT
+                if not chunks:
+                    content = NO_LINK_TEXT if link_query and link_query.explicit else NO_ANSWER_TEXT
                     yield ChatEvent("sources", {"sources": []})
                     yield ChatEvent("token", {"text": content})
                     status = "complete"
                 else:
-                    yield ChatEvent(
-                        "sources", {"sources": [source_read(c).model_dump(mode="json") for c in result.chunks]}
-                    )
+                    yield ChatEvent("sources", {"sources": [source_read(c).model_dump(mode="json") for c in chunks]})
                     yield ChatEvent("status", {"stage": "generating"})
-                    sources = to_source_documents(result.chunks)
-                    tracker = CitationTracker(result.chunks, sources)
+                    sources = to_source_documents(chunks)
+                    tracker = CitationTracker(chunks, sources)
                     async for event in llm.stream_answer(question=ask.question, sources=sources, history=ask.history):
                         for out in tracker.feed(event):
                             if isinstance(out, AnswerToken):
@@ -498,6 +513,11 @@ class ChatService:
         finally:
             latency_ms = int((time.perf_counter() - ask.started) * 1000)
             citations = tracker.ordered_citations if tracker else []
+            unverified = unverified_urls(content, tracker.chunks) if tracker else []
+            if unverified:
+                log.warning(
+                    "answer_has_unverified_urls", count=len(unverified), message_id=str(ask.assistant_message_id)
+                )
             if status == "complete":
                 models.clear_unavailable(ask.model_id)
             usage = usage_record(
@@ -521,6 +541,7 @@ class ChatService:
                 "model": ask.model_id,
                 "citations": [citation_read(c).model_dump(mode="json") for c in citations],
                 "citations_rejected": tracker.rejected if tracker else 0,
+                "unverified_urls": len(unverified),
                 "usage": usage,
                 "latency_ms": latency_ms,
             },

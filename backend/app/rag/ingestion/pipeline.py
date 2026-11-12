@@ -1,7 +1,8 @@
 """The document ingestion pipeline (runs in the arq worker).
 
-    claim job → parse → chunk → embed (dense + BM25) → store chunks (PG) → upsert points (Qdrant,
-    searchable=false) → finalize: flip to searchable + current ACL, drop older versions, mark INDEXED
+    claim job → parse (text, tables, hyperlinks) → chunk → embed (dense + BM25) → store chunks and links
+    (PG) → upsert points (Qdrant, searchable=false) → finalize: flip to searchable + current ACL, drop
+    older versions (chunks, links, points), mark INDEXED
 
 Guarantees
 ----------
@@ -29,10 +30,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.models import Document, DocumentChunk, DocumentPermission, EmbeddingConfig, IngestionJob
+from app.models import Document, DocumentChunk, DocumentLink, DocumentPermission, EmbeddingConfig, IngestionJob
 from app.models.enums import DocumentStatus, JobStatus
 from app.rag.chunking.chunker import Chunk, Chunker
 from app.rag.embeddings.base import EmbeddingProvider, SparseEncoder
+from app.rag.ingestion.links import domain_of, shown_in
 from app.rag.ingestion.parsers import parse_document
 from app.rag.ingestion.safety import content_flags
 from app.rag.ingestion.types import IngestionError, ParsedDocument, PermanentIngestionError
@@ -144,6 +146,7 @@ class IngestionPipeline:
             started = time.perf_counter()
             flags = [content_flags(c.text) for c in chunks]
             await self._store_chunks(document_id, claim, chunks, flags)
+            await self._store_links(document_id, claim, parsed)
             await self.store.delete_document(self.collection, document_id, index_version=version)  # earlier attempt
             await self.store.upsert(
                 self.collection,
@@ -152,7 +155,7 @@ class IngestionPipeline:
                         id=point_id(document_id, version, c.index),
                         dense=dense[i],
                         sparse=sparse[i],
-                        payload=self._payload(document_id, claim, c, flags[i]),
+                        payload=self._payload(document_id, claim, c, flags[i], parsed),
                     )
                     for i, c in enumerate(chunks)
                 ],
@@ -256,7 +259,35 @@ class IngestionPipeline:
             )
             await s.commit()
 
-    def _payload(self, document_id: uuid.UUID, claim: _Claim, chunk: Chunk, flags: list[str]) -> dict[str, Any]:
+    async def _store_links(self, document_id: uuid.UUID, claim: _Claim, parsed: ParsedDocument) -> None:
+        async with self.sessionmaker() as s:
+            await s.execute(
+                delete(DocumentLink).where(
+                    DocumentLink.document_id == document_id, DocumentLink.index_version == claim.index_version
+                )
+            )
+            s.add_all(
+                DocumentLink(
+                    document_id=document_id,
+                    organization_id=claim.organization_id,
+                    index_version=claim.index_version,
+                    position=position,
+                    url=link.url,
+                    domain=(domain_of(link.url) or "")[:255] or None,
+                    link_type=link.link_type,
+                    anchor_text=link.anchor_text,
+                    page_number=link.page,
+                    sheet_name=(link.sheet or None) and link.sheet[:255],
+                    cell_reference=link.cell,
+                    section_name=link.section_path,
+                )
+                for position, link in enumerate(parsed.links)
+            )
+            await s.commit()
+
+    def _payload(
+        self, document_id: uuid.UUID, claim: _Claim, chunk: Chunk, flags: list[str], parsed: ParsedDocument
+    ) -> dict[str, Any]:
         return {
             "org_id": str(claim.organization_id),
             "document_id": str(document_id),
@@ -279,6 +310,8 @@ class IngestionPipeline:
             "token_count": chunk.token_count,
             "content_hash": chunk.content_hash,
             "flags": flags,
+            # Link targets whose URL appears in this chunk (exact-match filtering, e.g. by domain, later).
+            "urls": sorted({link.url for link in parsed.links if shown_in(link.url, chunk.text)})[:50],
         }
 
     async def _finalize(
@@ -333,6 +366,11 @@ class IngestionPipeline:
                     DocumentChunk.document_id == document_id, DocumentChunk.index_version != version
                 )
             )
+            await s.execute(
+                delete(DocumentLink).where(
+                    DocumentLink.document_id == document_id, DocumentLink.index_version != version
+                )
+            )
 
             document.status = DocumentStatus.INDEXED
             document.active_index_version = version
@@ -345,6 +383,7 @@ class IngestionPipeline:
                 "extracted": parsed.metadata,
                 "warnings": parsed.warnings,
                 "flagged_chunks": sum(1 for c in chunks if content_flags(c.text)),
+                "link_count": len(parsed.links),
             }
             document.error_message = None
             document.indexed_at = _now()
@@ -358,6 +397,7 @@ class IngestionPipeline:
                 "embedding_model": self.embedder.model_id,
                 "collection": self.collection,
                 "warnings": len(parsed.warnings),
+                "links": len(parsed.links),
             }
             await s.commit()
         log.info("ingestion_succeeded", document_id=str(document_id), version=version, chunks=len(chunks))
@@ -369,6 +409,9 @@ class IngestionPipeline:
             delete(DocumentChunk).where(
                 DocumentChunk.document_id == document_id, DocumentChunk.index_version == version
             )
+        )
+        await session.execute(
+            delete(DocumentLink).where(DocumentLink.document_id == document_id, DocumentLink.index_version == version)
         )
 
     async def _cleanup_attempt(self, document_id: uuid.UUID, claim: _Claim) -> None:

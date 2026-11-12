@@ -542,6 +542,11 @@ class DocumentService:
         )
         return document, list(chunks), total
 
+    async def get_visible(self, principal: Principal, document_id: uuid.UUID) -> Document:
+        """The document if the principal may view it (404 otherwise, without revealing that it exists)."""
+        document, _ = await self._get_visible(principal, document_id)
+        return document
+
     # --- access helpers --------------------------------------------------------------------
     async def _get_visible(
         self, principal: Principal, document_id: uuid.UUID

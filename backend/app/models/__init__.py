@@ -5,6 +5,7 @@ from app.models.chat import Conversation, Message, MessageCitation, RetrievalLog
 from app.models.chunk import DocumentChunk, EmbeddingConfig
 from app.models.document import Category, Document, DocumentPermission, IngestionJob
 from app.models.evaluation import DocumentComparison, EvalCase, EvalCaseResult, EvalDataset, EvalRun
+from app.models.link import DocumentLink
 from app.models.organization import Organization
 from app.models.user import GroupMember, RefreshToken, User, UserGroup
 
@@ -15,6 +16,7 @@ __all__ = [
     "Document",
     "DocumentChunk",
     "DocumentComparison",
+    "DocumentLink",
     "DocumentPermission",
     "EmbeddingConfig",
     "EvalCase",

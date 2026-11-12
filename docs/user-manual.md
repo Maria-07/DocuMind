@@ -324,6 +324,25 @@ Answers contain numbered markers like **[1]**. Each marker is a citation with:
 Click a citation to open the source document. DocuMind checks every citation against the passage
 it claims to quote; a citation that doesn't match is dropped and never shown.
 
+### Asking for links
+
+DocuMind reads the links in your documents, including the address hidden behind clickable text such as
+"GitHub Profile" or "Personal Portfolio": PDF links, Word hyperlinks, Excel cell links and
+`HYPERLINK()` formulas, and addresses written out as text. You can ask, for example:
+
+- *What is the GitHub link in my resume?*
+- *Find the LinkedIn URL.*
+- *Find the link behind the text "GitHub Profile".*
+- *Show me all links in this document.* or *Which websites are referenced in my documents?*
+
+The reply gives the exact address, which document it is in and where (page, section, or sheet and
+cell), and cites it like any other answer. If there are several matching links, it lists them. DocuMind
+never makes up an address: it only gives links that are in documents you can read, and says so when
+it can't find one. Links open in a new tab; DocuMind does not visit them.
+
+Documents uploaded before link extraction was added get their links when they are reprocessed
+(**Reprocess** on the document page, or **Embeddings → Re-index everything** for admins).
+
 ### When the documents don't say
 
 If no document is relevant enough, DocuMind says it couldn't find the answer instead of guessing, and

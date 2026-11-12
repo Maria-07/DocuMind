@@ -168,6 +168,14 @@ flowchart TD
 - **DOCX (python-docx):** walk body in order; `Heading N` styles build `section_path` ("Security > Access Control"); tables → Markdown. No page numbers in DOCX (they're a rendering artifact) → citations use section instead.
 - **XLSX/XLS:** per sheet, detect header row, emit rows as `col: value` records; computed values (not formulas) via `data_only=True`; hidden sheets included but flagged; very large sheets capped with a warning.
 
+**Hyperlinks (`ParsedDocument.links`, `app/rag/ingestion/links.py`).** Every parser also returns the document's links with their real targets, because the visible text ("GitHub Profile") usually hides the URL:
+- **PDF:** link annotations with a URI action (`page.hyperlinks`); the anchor text is the words whose centre lies in the link rectangle. Internal (GoTo) links have no URI and are skipped.
+- **DOCX:** `w:hyperlink` elements resolved through the part's relationships (external targets only; bookmarks are skipped) and `HYPERLINK "..."` field codes (complex and simple fields), in body paragraphs and table cells, each with its section path.
+- **XLSX:** openpyxl's read-only mode (used to keep large workbooks cheap) does not expose hyperlinks, so each sheet's XML is streamed once more with defusedxml for `<hyperlink>` elements (target from the sheet relationships) and `=HYPERLINK("url","label")` formulas with literal arguments. **XLS:** xlrd's `hyperlink_map` (web links only).
+- **Everywhere:** URLs written as text (`http(s)://`, `ftp://`, `www.`), with trailing sentence punctuation and unbalanced brackets removed; the URL is otherwise kept exactly as written.
+- Only `http`, `https`, `ftp` and `mailto` targets are kept (no `javascript:`, `file:`, `data:`), at most 2,048 characters. One record per (URL, location): the same URL on two pages is two records; an annotation and the same URL written as text at one location are one record (the annotated one, which has anchor text). `link_type` is `hyperlink` (target hidden behind other text), `url` (written out) or `email` (`mailto:`).
+- **Indexed text:** hidden targets are written into the text that is chunked and embedded, so ordinary search finds them and an answer can quote them: DOCX and Excel inline ("GitHub Profile (https://github.com/...)", "Profile: GitHub (https://...)"), PDF as a "Links on this page:" list after the page text. Excel header-row cells are labels for every record, so their targets are recorded but not inlined.
+
 **Chunking (configurable per org/eval config).**
 1. Never cross a hard boundary: page (PDF), top-level section (DOCX), sheet (Excel).
 2. Within a boundary, LangChain `RecursiveCharacterTextSplitter.from_huggingface_tokenizer` using the **embedding model's tokenizer** — sizes are true token counts for the model that embeds them. Defaults: `chunk_size=512` tokens, `chunk_overlap=64`.
@@ -178,6 +186,8 @@ flowchart TD
 **Idempotency & searchability.** Every ingestion run writes under a new `index_version`. Points are upserted with `searchable=false`; only after *all* points are written does the worker flip them to `true` and delete older versions — a half-indexed document can never be retrieved, and reprocessing never makes a document temporarily unsearchable. Point IDs are deterministic UUIDv5(`doc_id`, `index_version`, `chunk_index`) so a retried job overwrites rather than duplicates.
 
 **Duplicates.** `UNIQUE (organization_id, sha256) WHERE deleted_at IS NULL`. Re-uploading identical bytes returns the existing document (UI: "Already uploaded as …"). Same name/different bytes is a new document.
+
+**Links are versioned like chunks.** `document_links` rows are written for the new `index_version` before the vectors, and finalize deletes the other versions together with the old chunks; a discarded attempt removes its own rows. Reprocessing therefore never duplicates links. Purging a deleted document deletes its link rows. Documents indexed before link extraction existed get their links when they are reprocessed.
 
 **Deletion.** Soft delete in PG (immediately excluded from listings and from the retrieval post-filter) → set Qdrant `searchable=false` synchronously by filter (fast) → worker purges points, chunks, and the stored file. A periodic **reconciliation job** compares PG and Qdrant counts per document and repairs drift.
 
@@ -297,6 +307,31 @@ Rendered as a comparison table (aspect rows × document columns) with citations 
 
 > **As implemented (Phase 6).** Sources are numbered across documents and the model refers to documents by label (D1…); the server maps labels back to documents, rejects citations of another document's sources, downgrades unevidenced "present" findings to "unclear", fills findings the model omitted, and replaces labels with titles in user-facing text. The structured output uses the provider's strict JSON-schema mode (`complete_json`) for both Anthropic and OpenAI. Comparisons are stored (`document_comparisons`) and listed per user.
 
+### 3.5 Hyperlink lookup
+
+Questions about links are answered from `document_links` with **exact matching**, next to (not instead of) vector retrieval, in `app/services/links.py`:
+
+1. `detect_link_query` recognises link questions: a platform name (GitHub → `github.com`/`github.io`, LinkedIn → `linkedin.com`, ...) or a domain in the question; a quoted anchor text ('the link behind "GitHub Profile"'); or words such as *link, URL, website, homepage*. "All / list / which ... links" asks for every link. *Profile, site* and *portfolio* alone are weak signals (they occur in "risk profile"): such a question only uses links that match its other words.
+2. `LinkService.lookup` runs one SQL query, joined on the document's **active index version** and filtered by `visible_documents_clause(principal)` (the SQL twin of `can_view` that document listings use) plus the chat scope. A named platform/domain or quoted anchor matches exactly (domain equal or a subdomain of it; anchor `ILIKE`); other words match anchor text, URL or section; a link question that matches nothing specific gets every visible link (capped at 50) and the model picks the relevant ones.
+3. The matches become one citable source per document, *"Hyperlinks extracted from this document (exact link targets)"*, one line per link (`anchor -> url (page 2, hyperlink)`, `(sheet People, cell B2, hyperlink)`), placed **before** the retrieved passages. Citations of these lines are validated like any other.
+4. If the router chose *chat* but the question matches links in the user's documents, the message is answered from the documents. With no links and no passages, the reply says no such link was found and the model is not called.
+5. The answer prompt (`answer-v3`) requires URLs to be copied character for character and forbids building, completing or guessing them. After the answer, every URL in it is checked against the supplied sources; the number of unverified URLs is logged (without the URLs) and returned as `done.unverified_urls`.
+
+`GET /documents/{id}/links` lists one document's links; `POST /search/links` searches them across the organization by question, platform, domain, anchor text or keyword.
+
+### 3.6 Fetching linked pages (not implemented; design)
+
+Extracted URLs are **not** fetched. If fetching public pages is added later, it belongs in its own service, behind an explicit user action or a per-organization setting, and must:
+
+- accept only `http`/`https` URLs on ports 80/443, without credentials in the URL;
+- resolve the host and refuse private, loopback, link-local, multicast and reserved addresses (IPv4 and IPv6, including IPv4-mapped forms), then connect to the address that was checked (no second DNS lookup, against DNS rebinding);
+- follow at most a few redirects, re-validating every hop with the same rules;
+- use short connect/read timeouts, a maximum response size enforced while streaming, and an allow-list of content types (HTML, plain text, PDF);
+- never send the user's cookies or tokens, and never try to get past logins, paywalls or CAPTCHAs;
+- treat fetched content as untrusted data, exactly like document text (prompt-injection flags, no instructions followed), store it with its fetch time, and cite it as a web page, not as the document;
+- apply the document's access rules: only users who can view the document can trigger or see fetches of its links;
+- rate-limit fetches per user and organization and record them in the audit log.
+
 ---
 
 ## 4. PostgreSQL schema
@@ -349,6 +384,7 @@ erDiagram
 | `document_permissions` | id, document_id, principal_type (`user`\|`group`), principal_id, permission (`view`\|`manage`), granted_by, created_at | unique (document_id, principal_type, principal_id) |
 | `ingestion_jobs` | id, document_id, index_version, status (`queued`\|`running`\|`succeeded`\|`failed`), attempt, stage (`parse`\|`chunk`\|`embed`\|`upsert`\|`finalize`), error?, metrics jsonb (timings, token counts), started_at, finished_at | idx (document_id, created_at desc) |
 | `document_chunks` | id (= Qdrant point id), document_id, organization_id, index_version, chunk_index, text, token_count, page_start?, page_end?, sheet_name?, row_start?, row_end?, section_path?, content_hash, flags text[] | unique (document_id, index_version, chunk_index); idx (organization_id) |
+| `document_links` | id, document_id, organization_id, index_version, position, url (exact), domain (lower-case, no `www.`), link_type (`hyperlink`\|`url`\|`email`), anchor_text, page_number, sheet_name, cell_reference, section_name, created_at | unique (document_id, index_version, position); idx (document_id, index_version); idx (organization_id, domain); FK document_id → documents ON DELETE CASCADE |
 | `embedding_configs` | id, name, embedding_provider, embedding_model, dim, sparse_model, chunk_size, chunk_overlap, qdrant_collection, is_active, created_at | one active per deployment; the basis of re-index & regression runs |
 
 **Conversations**
@@ -413,6 +449,7 @@ erDiagram
   "token_count": 412,
   "content_hash": "sha256",
   "flags": [],
+  "urls": ["https://github.com/..."],
   "created_at": "2026-11-06T10:00:00Z"
 }
 ```
@@ -509,6 +546,7 @@ Conventions: JSON; `Authorization: Bearer <access>`; errors `{"error": {"code": 
 | GET | `/api/v1/documents/{id}/preview` | PDF inline stream; DOCX/Excel → extracted structured text for viewer |
 | GET | `/api/v1/documents/{id}/chunks` | paginated chunks (citation deep-link target, eval labeling) |
 | GET | `/api/v1/documents/{id}/jobs` | ingestion history |
+| GET | `/api/v1/documents/{id}/links` | hyperlinks of the active version: url, anchor_text, link_type, page / sheet + cell / section (view) |
 | GET/PUT | `/api/v1/documents/{id}/permissions` | list / replace grants (manage) |
 | GET/POST/PATCH/DELETE | `/api/v1/categories[/{id}]` | |
 
@@ -537,6 +575,7 @@ Conventions: JSON; `Authorization: Bearer <access>`; errors `{"error": {"code": 
 | POST | `/api/v1/search/semantic` | `{query, top_k≤50, filters{document_ids, category_ids, file_types}, rerank?: bool}` → `{results: [{chunk, document, score}]}` |
 | POST | `/api/v1/search/hybrid` | same + `{fusion: rrf, dense_k, sparse_k}` |
 | POST | `/api/v1/search/documents` | document-level results (grouped) for "find documents mentioning X" |
+| POST | `/api/v1/search/links` | `{query, filters?, limit≤200}` → hyperlinks by platform, domain, quoted anchor text or keyword (exact SQL matching, permission-filtered) |
 
 ### Evaluations (Admin; Manager read)
 | Method | Path | Notes |

@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from app.rag.generation.base import BlockEnd, CitationDelta, GenerationDone, GenerationEvent, SourceDocument, TextDelta
+from app.rag.ingestion.links import urls_in_text
 from app.rag.retrieval import RetrievedChunk
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")
@@ -18,6 +19,10 @@ _WS = re.compile(r"\s+")
 _MIN_PASSAGE_CHARS = 40
 _SNIPPET_CHARS = 500
 
+NO_LINK_TEXT = (
+    "I couldn't find a link like that in the documents you have access to. "
+    "Could you tell me which document it should be in, or what the link text says?"
+)
 NO_ANSWER_TEXT = (
     "I couldn't find information about this in the documents you have access to. "
     "Could you try rephrasing the question, or tell me which document it should be in? "
@@ -27,8 +32,8 @@ REFUSAL_TEXT = "I can't help with this request."
 
 
 def split_passages(text: str, kind: str = "text") -> list[str]:
-    """Citable units: sentences for prose, lines for tables/rows. Tiny pieces are merged."""
-    if kind in ("table", "rows"):
+    """Citable units: sentences for prose, lines for tables, rows and link lists. Tiny prose pieces are merged."""
+    if kind in ("table", "rows", "links"):
         pieces = [line for line in text.split("\n") if line.strip()]
     else:
         pieces = []
@@ -37,7 +42,7 @@ def split_passages(text: str, kind: str = "text") -> list[str]:
     passages: list[str] = []
     for piece in pieces:
         piece = piece.strip()
-        if passages and len(passages[-1]) < _MIN_PASSAGE_CHARS and kind not in ("table", "rows"):
+        if passages and len(passages[-1]) < _MIN_PASSAGE_CHARS and kind not in ("table", "rows", "links"):
             passages[-1] = f"{passages[-1]} {piece}"
         else:
             passages.append(piece)
@@ -143,3 +148,9 @@ class CitationTracker:
     @property
     def ordered_citations(self) -> list[Citation]:
         return sorted(self.citations.values(), key=lambda c: c.number)
+
+
+def unverified_urls(answer: str, chunks: list[RetrievedChunk]) -> list[str]:
+    """URLs in an answer that appear in none of the sources it was given (a model must never invent links)."""
+    texts = [c.text for c in chunks]
+    return [url for url in urls_in_text(answer) if not any(url in text for text in texts)]

@@ -409,6 +409,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_id}/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Hyperlinks found in the document (exact targets, with page / sheet + cell / section) */
+        get: operations["list_document_links_api_v1_documents__document_id__links_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{document_id}/jobs": {
         parameters: {
             query?: never;
@@ -526,6 +543,23 @@ export interface paths {
         put?: never;
         /** Which documents mention …? */
         post: operations["document_search_api_v1_search_documents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Find hyperlinks by platform, domain, anchor text or keyword (exact matching, no embeddings) */
+        post: operations["link_search_api_v1_search_links_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1200,6 +1234,20 @@ export interface components {
             sha256: string;
             latest_job?: components["schemas"]["IngestionJobRead"] | null;
         };
+        /** DocumentLinksResponse */
+        DocumentLinksResponse: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Index Version */
+            index_version: number;
+            /** Items */
+            items: components["schemas"]["LinkRead"][];
+            /** Total */
+            total: number;
+        };
         /** DocumentRead */
         DocumentRead: {
             /**
@@ -1653,6 +1701,77 @@ export interface components {
          * @enum {string}
          */
         JobStatus: "queued" | "running" | "succeeded" | "failed";
+        /**
+         * LinkRead
+         * @description A hyperlink found in a document. ``url`` is exactly the target written in the file.
+         */
+        LinkRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Document Title */
+            document_title: string;
+            /** File Type */
+            file_type: string;
+            /** Url */
+            url: string;
+            /** Domain */
+            domain: string | null;
+            /**
+             * Link Type
+             * @description hyperlink: target hidden behind anchor text · url: written out as text · email: mailto link
+             * @enum {string}
+             */
+            link_type: "hyperlink" | "url" | "email";
+            /** Anchor Text */
+            anchor_text: string | null;
+            /** Page Number */
+            page_number: number | null;
+            /** Sheet Name */
+            sheet_name: string | null;
+            /** Cell Reference */
+            cell_reference: string | null;
+            /** Section Name */
+            section_name: string | null;
+            /**
+             * Location
+             * @description Human-readable location, e.g. "page 2" or "sheet People, cell B2"
+             */
+            location: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** LinkSearchRequest */
+        LinkSearchRequest: {
+            /**
+             * Query
+             * @description A question or keywords: "GitHub", "linkedin.com", "portfolio", "all links"
+             */
+            query: string;
+            filters?: components["schemas"]["Scope"] | null;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+        };
+        /** LinkSearchResponse */
+        LinkSearchResponse: {
+            /** Results */
+            results: components["schemas"]["LinkRead"][];
+            /** Took Ms */
+            took_ms: number;
+        };
         /** LoginRequest */
         LoginRequest: {
             /**
@@ -4326,6 +4445,73 @@ export interface operations {
             };
         };
     };
+    list_document_links_api_v1_documents__document_id__links_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentLinksResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_document_jobs_api_v1_documents__document_id__jobs_get: {
         parameters: {
             query?: never;
@@ -4819,6 +5005,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentSearchResponse"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    link_search_api_v1_search_links_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkSearchResponse"];
                 };
             };
             /** @description Not authenticated */
