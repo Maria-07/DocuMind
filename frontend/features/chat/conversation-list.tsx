@@ -1,9 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { MessageSquarePlus, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,19 +13,21 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { errorMessage } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-import { useConversations, useCreateConversation, useDeleteConversation, useRenameConversation } from "./queries";
+import { DeleteConversationDialog, RenameConversationDialog } from "./conversation-dialogs";
+import { useConversations, useCreateConversation } from "./queries";
+
+type Dialogs = { kind: "rename" | "delete"; id: string; title: string } | null;
 
 export function ConversationList() {
   const { id: activeId } = useParams<{ id?: string }>();
   const router = useRouter();
   const { data, isLoading } = useConversations();
   const create = useCreateConversation();
-  const rename = useRenameConversation();
-  const remove = useDeleteConversation();
+  const [dialog, setDialog] = useState<Dialogs>(null);
+  const close = () => setDialog(null);
 
   return (
     <div className="flex h-full flex-col">
@@ -56,32 +58,20 @@ export function ConversationList() {
               <span className="block truncate text-sm font-medium">{c.title}</span>
               <span className="block text-xs text-muted-foreground">{timeAgo(c.updated_at)}</span>
             </Link>
-            <DropdownMenu>
+            {/* Not modal: the dialogs it opens manage focus and scroll locking themselves. */}
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label={`Options for ${c.title}`}>
                   <MoreHorizontal />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onSelect={() => {
-                    const title = prompt("Rename conversation", c.title)?.trim();
-                    if (title && title !== c.title) rename.mutate({ id: c.id, title }, { onError: (e) => toast.error(errorMessage(e)) });
-                  }}
-                >
+                <DropdownMenuItem onSelect={() => setDialog({ kind: "rename", id: c.id, title: c.title })}>
                   <Pencil /> Rename
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   variant="destructive"
-                  onSelect={() => {
-                    if (!confirm(`Delete "${c.title}"?`)) return;
-                    remove.mutate(c.id, {
-                      onSuccess: () => {
-                        if (c.id === activeId) router.replace("/chat");
-                      },
-                      onError: (e) => toast.error(errorMessage(e)),
-                    });
-                  }}
+                  onSelect={() => setDialog({ kind: "delete", id: c.id, title: c.title })}
                 >
                   <Trash2 /> Delete
                 </DropdownMenuItem>
@@ -90,6 +80,14 @@ export function ConversationList() {
           </div>
         ))}
       </div>
+      <RenameConversationDialog conversation={dialog?.kind === "rename" ? dialog : null} onClose={close} />
+      <DeleteConversationDialog
+        conversation={dialog?.kind === "delete" ? dialog : null}
+        onClose={close}
+        onDeleted={(id) => {
+          if (id === activeId) router.replace("/chat");
+        }}
+      />
     </div>
   );
 }

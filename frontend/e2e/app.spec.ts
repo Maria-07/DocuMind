@@ -360,3 +360,52 @@ test("pick a model, see what a reply costs, edit a message and resubmit it", asy
   await expect(page.getByTestId("assistant-message")).toHaveCount(1);
   await expect(page.getByText("edited", { exact: true })).toBeVisible();
 });
+
+test("rename and delete a conversation in dialogs", async ({ page }) => {
+  await login(page, admin.email);
+  await nav(page, "AI Chat");
+  await page.getByRole("button", { name: "New conversation" }).click();
+  await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
+  const item = page.locator(`a[href='${new URL(page.url()).pathname}']`); // this conversation in the list
+  const oldTitle = (await item.locator("span").first().innerText()).trim();
+
+  // Rename: a dialog with the current name selected; Escape cancels, Save renames.
+  await page.getByRole("button", { name: `Options for ${oldTitle}` }).first().click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  let dialog = page.getByRole("dialog", { name: "Rename conversation" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Name")).toHaveValue(oldTitle);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  const newTitle = `Renamed ${unique}`;
+  await page.getByRole("button", { name: `Options for ${oldTitle}` }).first().click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  await dialog.getByLabel("Name").fill(newTitle);
+  await dialog.getByLabel("Name").press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Conversation renamed")).toBeVisible();
+  await expect(item).toContainText(newTitle);
+  await shot(page, "21-conversation-renamed");
+
+  // Delete: a confirmation dialog naming the conversation; Cancel keeps it, Delete removes it.
+  await page.getByRole("button", { name: `Options for ${newTitle}` }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  dialog = page.getByRole("dialog", { name: "Delete conversation?" });
+  await expect(dialog).toContainText(newTitle);
+  await shot(page, "22-conversation-delete-dialog");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(item).toBeVisible();
+
+  await page.getByRole("button", { name: `Options for ${newTitle}` }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await dialog.getByRole("button", { name: "Delete" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Conversation deleted")).toBeVisible();
+  await expect(page).toHaveURL(/\/chat$/); // it was open, so the page leaves it
+  await expect(item).toHaveCount(0);
+  // The page is still usable: the menus and dialogs left no blocking overlay behind.
+  await page.getByRole("button", { name: "New conversation" }).click();
+  await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
+});
