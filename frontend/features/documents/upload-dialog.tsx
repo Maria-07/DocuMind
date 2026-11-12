@@ -154,6 +154,12 @@ export function UploadDialog() {
   const ready = items.filter((i) => i.phase === "ready" && !i.problem);
   const busy = items.some(isBusy);
 
+  // Uploads in progress continue in the background; finished and unsent rows are cleared.
+  const close = useCallback(() => {
+    setOpen(false);
+    setItems((prev) => prev.filter(isBusy));
+  }, []);
+
   function submit() {
     const ids = new Set(ready.map((i) => i.id));
     for (const item of ready) {
@@ -171,17 +177,13 @@ export function UploadDialog() {
         .map((i) => (ids.has(i.id) ? { ...i, phase: "queued" } : i)),
     );
     pump();
+    // Nothing more to do here: close right away. Progress and the result arrive as a toast.
+    toast.info(`Uploading ${ids.size} file${ids.size > 1 ? "s" : ""} in the background…`);
+    close();
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        // Uploads in progress continue in the background; finished and unsent rows are cleared.
-        if (!o) setItems((prev) => prev.filter(isBusy));
-      }}
-    >
+    <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
       <DialogTrigger asChild>
         <Button>
           <Upload /> Upload documents
@@ -192,7 +194,7 @@ export function UploadDialog() {
           <DialogTitle>Upload documents</DialogTitle>
           <DialogDescription>
             PDF, Word (.docx) and Excel (.xlsx, .xls) — up to {MAX_FILES} files, {MAX_MB} MB each. Files upload in
-            parallel; you can close this dialog and they keep going.
+            parallel in the background; the dialog closes when you press Upload.
           </DialogDescription>
         </DialogHeader>
 
@@ -278,7 +280,7 @@ export function UploadDialog() {
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>
+          <Button variant="outline" onClick={close}>
             {busy ? "Close" : items.some((i) => i.phase === "done") ? "Done" : "Cancel"}
           </Button>
           <Button onClick={submit} disabled={ready.length === 0}>

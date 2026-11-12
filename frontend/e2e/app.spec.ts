@@ -57,8 +57,8 @@ test("register, upload, index, ask, cite, navigate", async ({ page }) => {
   ]);
   await shot(page, "02-upload-dialog");
   await dialog.getByRole("button", { name: "Upload 2 files" }).click();
-  await expect(dialog.getByText("Security Policy.docx")).toBeVisible();
-  await dialog.getByRole("button", { name: "Done" }).click();
+  // The dialog closes as soon as the files are handed over; uploading continues in the background.
+  await expect(dialog).toBeHidden();
 
   // --- Status updates live until both are indexed ------------------------------------------
   const rows = page.getByRole("row");
@@ -266,7 +266,7 @@ test("PDF upload and in-app preview work under the CSP", async ({ page }) => {
   }).toPass({ timeout: 30_000 });
   await dialog.locator('input[type="file"]').setInputFiles([path.join(FIXTURES, "Travel Handbook.pdf")]);
   await dialog.getByRole("button", { name: /Upload 1 file/ }).click();
-  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(dialog).toBeHidden();
   await expect(page.getByRole("row").filter({ hasText: "Travel Handbook" }).getByText("Indexed")).toBeVisible({ timeout: 180_000 });
   await page.getByRole("link", { name: /Travel Handbook/ }).first().click();
   await page.getByRole("tab", { name: "Preview" }).click();
