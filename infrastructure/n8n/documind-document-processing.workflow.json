@@ -707,7 +707,7 @@
         "toEmail": "={{ $env.NOTIFY_EMAIL_TO }}",
         "subject": "={{ ($json.severity === 'success' ? 'Completed' : ($json.severity === 'error' ? 'FAILED' : 'Needs attention')) + ' - DocuMind document processing' }}",
         "emailFormat": "text",
-        "text": "={{ $json.text + '\n\nDocument id: ' + $json.document_id + '\nJob id: ' + $json.job_id + '\nn8n execution: ' + $json.execution_id }}",
+        "text": "={{ [$json.text, '', 'Document id: ' + $json.document_id, 'Job id: ' + $json.job_id, 'n8n execution: ' + $json.execution_id].join(String.fromCharCode(10)) }}",
         "options": {}
       },
       "id": "adcdfee1-8082-56c9-ab1a-dcd71a6b77f4",

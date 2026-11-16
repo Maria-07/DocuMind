@@ -82,6 +82,28 @@ def test_secrets_come_from_the_environment_never_from_the_file(workflow: dict) -
         assert sends_key == (node["name"] != "Send Notification"), node["name"]
 
 
+def _strings(value: object):  # type: ignore[no-untyped-def]
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
+
+
+def test_expressions_are_single_line_javascript(workflow: dict) -> None:  # type: ignore[type-arg]
+    """A raw newline inside a quoted string in an expression makes n8n fail with "invalid syntax" at run time
+    (and "continue on error" then hides it), so expressions must not contain line breaks."""
+    for node in workflow["nodes"]:
+        if node["type"] == "n8n-nodes-base.code":
+            continue  # code nodes are multi-line programs
+        for text in _strings(node["parameters"]):
+            if text.startswith("="):
+                assert not any(ch in text for ch in (chr(10), chr(13))), f"{node['name']}: {text[:80]!r}"
+
+
 def test_notification_failures_cannot_stop_processing(workflow: dict) -> None:  # type: ignore[type-arg]
     nodes = {n["name"]: n for n in workflow["nodes"]}
     assert nodes["Send Notification"]["onError"] == "continueRegularOutput"
