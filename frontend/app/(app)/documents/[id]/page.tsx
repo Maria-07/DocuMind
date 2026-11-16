@@ -6,7 +6,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { AlertTriangle, ArrowLeft, Download, Loader2, MessageSquare, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { ErrorState, FileIcon, PageBody, StatusBadge } from "@/components/common";
+import { ErrorState, FileIcon, IN_FLIGHT, PageBody, ProcessingNote, StatusBadge } from "@/components/common";
 import { MarkdownTable } from "@/components/markdown-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -258,15 +258,16 @@ function DocumentView() {
               <>
                 <Button
                   variant="outline"
-                  disabled={doc.status === "processing" || doc.status === "uploaded" || reprocess.isPending}
+                  disabled={IN_FLIGHT.has(doc.status) || reprocess.isPending}
                   onClick={() =>
                     reprocess.mutate(doc.id, {
-                      onSuccess: () => toast.success("Re-indexing started"),
+                      onSuccess: () => toast.success(doc.status === "failed" ? "Retry started" : "Re-indexing started"),
                       onError: (e) => toast.error(errorMessage(e)),
                     })
                   }
                 >
-                  {reprocess.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Reprocess
+                  {reprocess.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}{" "}
+                  {doc.status === "failed" ? "Retry" : "Reprocess"}
                 </Button>
                 <Button
                   variant="destructive"
@@ -290,11 +291,23 @@ function DocumentView() {
       </div>
 
       <PageBody>
+        {IN_FLIGHT.has(doc.status) && (
+          <Alert role="status">
+            <Loader2 className="animate-spin" />
+            <AlertTitle>
+              {doc.status === "retrying" ? "Retrying automatically" : "Your document is being processed"}
+            </AlertTitle>
+            <AlertDescription>
+              <ProcessingNote doc={doc} className="max-w-none whitespace-normal" />
+              This page updates by itself.
+            </AlertDescription>
+          </Alert>
+        )}
         {doc.status === "failed" && doc.error_message && (
           <Alert variant="destructive">
             <AlertTriangle />
             <AlertTitle>Processing failed</AlertTitle>
-            <AlertDescription>{doc.error_message}</AlertDescription>
+            <AlertDescription>{doc.error_message} You can try again with the Retry button.</AlertDescription>
           </Alert>
         )}
         {doc.status === "indexed" && doc.error_message && (

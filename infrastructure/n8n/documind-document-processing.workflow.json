@@ -1,0 +1,958 @@
+{
+  "name": "DocuMind - Document Processing Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "documind-document-uploaded",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a429880e-a4af-586b-95e0-85ac3e21bd14",
+      "name": "Webhook - Document Uploaded",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "1dbbb217-0d9d-5cfc-8ca6-8635e376233d"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Checks the shared secret and the required fields. Nothing from the event is trusted beyond these ids.\nconst item = $input.first().json;\nconst headers = item.headers || {};\nconst body = item.body || {};\nconst secret = $env.DOCUMIND_WEBHOOK_SECRET || '';\nconst presented = String(headers['x-documind-webhook-secret'] || '');\nconst uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\n\n// Constant-time comparison.\nlet diff = secret.length ^ presented.length;\nfor (let i = 0; i < Math.max(secret.length, presented.length); i++) {\n  diff |= (secret.charCodeAt(i) || 0) ^ (presented.charCodeAt(i) || 0);\n}\nconst authorized = secret.length > 0 && diff === 0;\n\nconst errors = [];\nif (body.event !== 'document.uploaded') errors.push('unexpected event type');\nfor (const field of ['document_id', 'job_id', 'organization_id']) {\n  if (!uuid.test(String(body[field] || ''))) errors.push('invalid ' + field);\n}\nconst valid = authorized && errors.length === 0;\nreturn [{\n  json: {\n    valid,\n    authorized,\n    errors: authorized ? errors : ['not authorized'],\n    event: valid ? {\n      event_id: body.event_id || null,\n      document_id: body.document_id,\n      job_id: body.job_id,\n      organization_id: body.organization_id,\n      file_type: body.file_type || null,\n      title: body.title || null,\n    } : null,\n  },\n}];"
+      },
+      "id": "5576cc16-dfc1-50e2-8420-4ff454110d49",
+      "name": "Validate Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "93881c2e-e812-585b-aac9-d1e1373dd123",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dbbde286-7eba-5fbf-a4dc-bb0919ed5dac",
+      "name": "Valid Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ accepted: true, execution_id: String($execution.id) }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "0563d073-f6e7-530f-a931-7ea4249ba0ab",
+      "name": "Respond 202 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ accepted: false, errors: $json.errors }) }}",
+        "options": {
+          "responseCode": "={{ $json.authorized ? 400 : 401 }}"
+        }
+      },
+      "id": "295c6966-c401-5af5-b8a9-a76fbf9652f9",
+      "name": "Respond Rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Rejected an invalid DocuMind webhook event: {{ $('Validate Event').first().json.errors.join(', ') }}"
+      },
+      "id": "18ef5bee-28bf-5b86-8175-1eca9f955c87",
+      "name": "Reject Event",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        880,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DOCUMIND_API_URL }}/internal/documents/{{ $('Validate Event').first().json.event.document_id }}/process",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Api-Key",
+              "value": "={{ $env.DOCUMIND_INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ job_id: $('Validate Event').first().json.event.job_id, organization_id: $('Validate Event').first().json.event.organization_id, event_id: $('Validate Event').first().json.event.event_id, execution_id: String($execution.id) }) }}"
+      },
+      "id": "533ce504-b3fc-5718-b025-a751e9581609",
+      "name": "Start Processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f6c9ff4d-c312-5c21-a45f-e28318874a2f",
+              "leftValue": "={{ $json.job_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8aefce89-df42-542c-9402-107d8dfdee60",
+      "name": "Started?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ parseInt($env.DOCUMIND_POLL_SECONDS || '5') }}",
+        "unit": "seconds"
+      },
+      "id": "507ece95-425d-5e46-b043-70b4a8b49569",
+      "name": "Wait Before Poll",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        120
+      ],
+      "webhookId": "0ba81276-0859-5f1c-af1f-a93e24b300c1"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.DOCUMIND_API_URL }}/internal/jobs/{{ $('Validate Event').first().json.event.job_id }}/status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Api-Key",
+              "value": "={{ $env.DOCUMIND_INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "organization_id",
+              "value": "={{ $('Validate Event').first().json.event.organization_id }}"
+            }
+          ]
+        }
+      },
+      "id": "3840c3b4-d2c4-54f1-90db-fb9664396542",
+      "name": "Check Job Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decides what happens next from the job status (PostgreSQL is the source of truth; nothing is kept here).\nconst s = $input.first().json;\nconst maxPolls = parseInt($env.DOCUMIND_MAX_POLLS || '720');\nconst pollSeconds = parseInt($env.DOCUMIND_POLL_SECONDS || '5');\nconst polls = $runIndex;\nlet decision;\nif (s.state === 'succeeded') {\n  decision = 'succeeded';\n} else if (s.state === 'failed') {\n  // can_retry: a temporary failure with retries left. retryable without can_retry: retries used up.\n  decision = s.can_retry ? 'retry' : (s.retryable ? 'exhausted' : 'failed');\n} else {\n  // queued / running, or no usable answer (the backend may be restarting): keep polling, within a limit.\n  decision = polls >= maxPolls ? 'timeout' : 'poll';\n}\nreturn [{ json: { ...s, decision, polls, wait_seconds: decision === 'retry' ? (s.retry_after_seconds || 30) : pollSeconds } }];"
+      },
+      "id": "a6ef94f1-7360-54dc-9699-9e330beea51a",
+      "name": "Evaluate Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2cdded1a-8bcf-5002-804b-995713acccf8",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "succeeded",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "succeeded"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "303e0832-c2eb-52b1-8ed1-6bd03a305fce",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "poll",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "poll"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2320d644-73c9-53c2-ba44-37dc49ccdd95",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "retry",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "retry"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "edfbbfed-7877-5dfe-aaeb-763b864d2618",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "failed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "failed"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2e00fb55-0540-5064-ae36-09c5349e58db",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "exhausted",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "exhausted"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "24b41aa6-0733-5d74-b686-c3df75038da1",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "timeout",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "timeout"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "edf07811-0f7c-5a32-bdeb-ea375cbcdce4",
+      "name": "Route Decision",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1980,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "1cf5bfb9-d415-51a3-aa0a-30731156e014",
+      "name": "Wait Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        360
+      ],
+      "webhookId": "f14f4118-be5b-5072-b6b7-7a5ddd004643"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DOCUMIND_API_URL }}/internal/jobs/{{ $('Validate Event').first().json.event.job_id }}/retry",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Api-Key",
+              "value": "={{ $env.DOCUMIND_INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ organization_id: $('Validate Event').first().json.event.organization_id, execution_id: String($execution.id) }) }}"
+      },
+      "id": "0aad49d0-dcdc-58dd-b1b2-6789d3b993c1",
+      "name": "Retry Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        360
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DOCUMIND_API_URL }}/internal/jobs/{{ $('Validate Event').first().json.event.job_id }}/workflow-status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Api-Key",
+              "value": "={{ $env.DOCUMIND_INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ organization_id: $('Validate Event').first().json.event.organization_id, state: 'succeeded', execution_id: String($execution.id), message: $json.error_code || null }) }}"
+      },
+      "id": "fbdf960e-1d45-5d54-9dd6-d704783ba46f",
+      "name": "Record Success",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        600
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DOCUMIND_API_URL }}/internal/jobs/{{ $('Validate Event').first().json.event.job_id }}/workflow-status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Api-Key",
+              "value": "={{ $env.DOCUMIND_INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ organization_id: $('Validate Event').first().json.event.organization_id, state: 'failed', execution_id: String($execution.id), message: $json.error_code || null }) }}"
+      },
+      "id": "6bbe95af-7936-52a2-b242-a590c2c124a9",
+      "name": "Record Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        840
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DOCUMIND_API_URL }}/internal/jobs/{{ $('Validate Event').first().json.event.job_id }}/workflow-status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Internal-Api-Key",
+              "value": "={{ $env.DOCUMIND_INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ organization_id: $('Validate Event').first().json.event.organization_id, state: 'exhausted', execution_id: String($execution.id), message: $json.error_code || null }) }}"
+      },
+      "id": "42f89c9b-acc3-5c88-8e8a-7ca5a7fa3388",
+      "name": "Record Exhausted",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        1080
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// A short message for the outcome. Ids and the file type only (a title only if the backend was set to send one);\n// never file contents, extracted text or links.\nconst ev = $('Validate Event').first().json.event;\nlet kind = 'attention';\ntry { kind = $('Evaluate Status').last().json.decision; } catch (e) { /* processing never started */ }\nlet status = {};\ntry { status = $('Evaluate Status').last().json; } catch (e) { status = {}; }\nconst label = (ev.title ? '\"' + ev.title + '\" ' : '') + '(' + (ev.file_type || 'document') + ', ' + ev.document_id + ')';\nconst messages = {\n  succeeded: 'DocuMind: ' + label + ' was processed successfully.',\n  failed: 'DocuMind: processing of ' + label + ' failed permanently (' + (status.error_code || 'error') + ').',\n  exhausted: 'DocuMind: processing of ' + label + ' failed after ' + (status.retry_count || 0) + ' retries (' + (status.error_code || 'error') + '). An administrator may need to look at it.',\n  timeout: 'DocuMind: ' + label + ' is still being processed after the maximum monitoring time. Please check on it.',\n  attention: 'DocuMind: processing of ' + label + ' could not be started and needs attention.',\n};\nconst severity = kind === 'succeeded' ? 'success' : (kind === 'failed' || kind === 'exhausted' ? 'error' : 'warning');\nreturn [{ json: { kind, severity, text: messages[kind] || messages.attention,\n  document_id: ev.document_id, job_id: ev.job_id, organization_id: ev.organization_id, execution_id: String($execution.id) } }];"
+      },
+      "id": "f9771837-0bb4-588c-9f58-eb0dc7aa0dd2",
+      "name": "Build Notice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        840
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5ec900ff-c6ec-5552-a83e-18d4f7e2afb8",
+              "leftValue": "={{ $env.NOTIFY_WEBHOOK_URL || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "43312868-d787-5e0e-8f93-d9ff224a504c",
+      "name": "Notification Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        840
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NOTIFY_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text, severity: $json.severity, document_id: $json.document_id, job_id: $json.job_id, execution_id: $json.execution_id }) }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "1ae02046-976d-54b4-9b6f-ae04fea4ab9f",
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        780
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "documind@example.com",
+        "toEmail": "admin@example.com",
+        "subject": "=DocuMind: {{ $json.kind }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "758f7e74-af6c-5c22-8e6b-9eee05ee30fd",
+      "name": "Send Email (optional)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2860,
+        920
+      ],
+      "disabled": true,
+      "onError": "continueRegularOutput",
+      "notes": "Disabled. To get e-mail: add an SMTP credential in n8n, set the addresses, enable this node."
+    },
+    {
+      "parameters": {
+        "content": "## DocuMind - Document Processing Automation\nFastAPI tells this workflow about each upload (ids only, no file contents). The workflow asks FastAPI to start processing, polls the job, retries temporary failures with exponential backoff (delay and limit come from FastAPI), records the outcome and sends an optional notification.\n\nSettings come from environment variables: DOCUMIND_API_URL, DOCUMIND_INTERNAL_API_KEY, DOCUMIND_WEBHOOK_SECRET, DOCUMIND_POLL_SECONDS, DOCUMIND_MAX_POLLS, NOTIFY_WEBHOOK_URL. Activate the workflow after importing it.",
+        "height": 220,
+        "width": 560
+      },
+      "id": "f661b4d1-b0e2-5808-a838-5cd6c820157a",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        20
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Document Uploaded": {
+      "main": [
+        [
+          {
+            "node": "Validate Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Event": {
+      "main": [
+        [
+          {
+            "node": "Valid Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Event?": {
+      "main": [
+        [
+          {
+            "node": "Respond 202 Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Rejected": {
+      "main": [
+        [
+          {
+            "node": "Reject Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 202 Accepted": {
+      "main": [
+        [
+          {
+            "node": "Start Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Processing": {
+      "main": [
+        [
+          {
+            "node": "Started?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Started?": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Poll": {
+      "main": [
+        [
+          {
+            "node": "Check Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Job Status": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Status": {
+      "main": [
+        [
+          {
+            "node": "Route Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Decision": {
+      "main": [
+        [
+          {
+            "node": "Record Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Exhausted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Retry": {
+      "main": [
+        [
+          {
+            "node": "Retry Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Job": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Poll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Success": {
+      "main": [
+        [
+          {
+            "node": "Build Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Failure": {
+      "main": [
+        [
+          {
+            "node": "Build Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Exhausted": {
+      "main": [
+        [
+          {
+            "node": "Build Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notice": {
+      "main": [
+        [
+          {
+            "node": "Notification Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notification Configured?": {
+      "main": [
+        [
+          {
+            "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "timezone": "UTC"
+  },
+  "tags": [],
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

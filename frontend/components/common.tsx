@@ -1,11 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, Clock, FileSpreadsheet, FileText, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, FileSpreadsheet, FileText, Loader2, RefreshCw, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { DocumentStatus, FileType } from "@/types";
+import type { DocumentRead, DocumentStatus, FileType } from "@/types";
 
 export function PageHeader({
   title,
@@ -33,8 +33,10 @@ export function PageBody({ children, className }: { children: ReactNode; classNa
 
 const STATUS: Record<DocumentStatus, { label: string; className: string; icon: typeof Clock; spin?: boolean }> = {
   uploaded: { label: "Uploaded", className: "bg-secondary text-secondary-foreground", icon: Clock },
+  queued: { label: "Queued", className: "bg-secondary text-secondary-foreground", icon: Clock },
   processing: { label: "Processing", className: "bg-accent text-accent-foreground", icon: Loader2, spin: true },
-  indexed: { label: "Indexed", className: "bg-success/12 text-success", icon: CheckCircle2 },
+  retrying: { label: "Retrying", className: "bg-warning/15 text-warning", icon: RefreshCw, spin: true },
+  indexed: { label: "Completed", className: "bg-success/12 text-success", icon: CheckCircle2 },
   failed: { label: "Failed", className: "bg-destructive/10 text-destructive", icon: XCircle },
 };
 
@@ -46,6 +48,44 @@ export function StatusBadge({ status }: { status: DocumentStatus }) {
       <Icon className={cn("size-3", s.spin && "animate-spin")} aria-hidden />
       {s.label}
     </Badge>
+  );
+}
+
+/** Statuses in which processing is still going on (the UI keeps refreshing while any document is in one). */
+export const IN_FLIGHT: ReadonlySet<DocumentStatus> = new Set(["uploaded", "queued", "processing", "retrying"]);
+
+const STAGE: Record<string, string> = {
+  parse: "Reading the file",
+  chunk: "Splitting into sections",
+  embed: "Creating embeddings",
+  store: "Saving to the index",
+  finalize: "Finishing up",
+};
+
+/** One short line under the status badge: the current step, a pending retry, or why it failed. */
+export function ProcessingNote({
+  doc,
+  className,
+}: {
+  doc: Pick<DocumentRead, "status" | "processing" | "error_message">;
+  className?: string;
+}) {
+  const p = doc.processing;
+  const retry = p && p.retry_count > 0 ? ` · retry ${p.retry_count}` : "";
+  let text: string | null = null;
+  let tone = "text-muted-foreground";
+  if (doc.status === "queued") text = "Waiting for a free worker";
+  else if (doc.status === "processing") text = `${(p?.stage && STAGE[p.stage]) || "Working"}${retry}`;
+  else if (doc.status === "retrying") text = `Temporary problem, trying again automatically${retry}`;
+  else if (doc.status === "failed") {
+    text = doc.error_message ?? "Processing failed";
+    tone = "text-destructive";
+  }
+  if (!text) return null;
+  return (
+    <span className={cn("block max-w-xs truncate text-xs", tone, className)} title={text}>
+      {text}
+    </span>
   );
 }
 

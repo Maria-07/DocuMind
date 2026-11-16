@@ -38,6 +38,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/documents/{document_id}/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start processing an uploaded document (asynchronous; returns the job state at once) */
+        post: operations["process_document_internal_documents__document_id__process_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/jobs/{job_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job state, stage, retry budget and last error (the single source of truth for the workflow) */
+        get: operations["job_status_internal_jobs__job_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/jobs/{job_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-queue a job that failed with a temporary error (idempotent, bounded by N8N_MAX_RETRIES) */
+        post: operations["retry_job_internal_jobs__job_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/jobs/{job_id}/workflow-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record the workflow's verdict (succeeded / permanent failure / retries exhausted) */
+        post: operations["record_workflow_status_internal_jobs__job_id__workflow_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/config": {
         parameters: {
             query?: never;
@@ -1230,6 +1298,8 @@ export interface components {
              * @default false
              */
             can_manage: boolean;
+            /** @description Latest ingestion job (list and detail) */
+            processing?: components["schemas"]["ProcessingInfo"] | null;
             /** Sha256 */
             sha256: string;
             latest_job?: components["schemas"]["IngestionJobRead"] | null;
@@ -1299,6 +1369,8 @@ export interface components {
              * @default false
              */
             can_manage: boolean;
+            /** @description Latest ingestion job (list and detail) */
+            processing?: components["schemas"]["ProcessingInfo"] | null;
         };
         /** DocumentSearchHit */
         DocumentSearchHit: {
@@ -1329,9 +1401,11 @@ export interface components {
         };
         /**
          * DocumentStatus
+         * @description Lifecycle: uploaded → (queued) → processing → indexed ("Completed"); failures: processing → (retrying →
+         *     processing) → failed. ``queued`` and ``retrying`` are only used for jobs driven by the n8n workflow.
          * @enum {string}
          */
-        DocumentStatus: "uploaded" | "processing" | "indexed" | "failed";
+        DocumentStatus: "uploaded" | "queued" | "processing" | "retrying" | "indexed" | "failed";
         /** DocumentUpdate */
         DocumentUpdate: {
             /** Title */
@@ -1679,6 +1753,25 @@ export interface components {
             stage: string | null;
             /** Error */
             error: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Retry Count
+             * @default 0
+             */
+            retry_count: number;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+            /**
+             * Workflow Managed
+             * @default false
+             */
+            workflow_managed: boolean;
+            /** Workflow Status */
+            workflow_status?: string | null;
             /**
              * Metrics
              * @description Stage timings, chunk/token counts
@@ -1701,6 +1794,63 @@ export interface components {
          * @enum {string}
          */
         JobStatus: "queued" | "running" | "succeeded" | "failed";
+        /** JobStatusRead */
+        JobStatusRead: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "running" | "succeeded" | "failed";
+            document_status: components["schemas"]["DocumentStatus"];
+            /** Stage */
+            stage: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Retry Count */
+            retry_count: number;
+            /** Max Retries */
+            max_retries: number;
+            /**
+             * Retryable
+             * @description The last failure was temporary
+             */
+            retryable: boolean;
+            /**
+             * Can Retry
+             * @description Failed, temporary, and retries are left
+             */
+            can_retry: boolean;
+            /**
+             * Retry After Seconds
+             * @description Backoff before the next retry (exponential, capped)
+             */
+            retry_after_seconds: number | null;
+            /** Error Code */
+            error_code: string | null;
+            /** Error */
+            error: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Workflow Status */
+            workflow_status: string | null;
+        };
         /**
          * LinkRead
          * @description A hyperlink found in a document. ``url`` is exactly the target written in the file.
@@ -1992,6 +2142,129 @@ export interface components {
          * @enum {string}
          */
         PrincipalType: "user" | "group";
+        /** ProcessRequest */
+        ProcessRequest: {
+            /**
+             * Organization Id
+             * Format: uuid
+             * @description The organization the event belongs to; ids of other organizations 404
+             */
+            organization_id: string;
+            /**
+             * Execution Id
+             * @description n8n execution id, for traceability
+             */
+            execution_id?: string | null;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Event Id
+             * @description Id of the webhook event (logging only)
+             */
+            event_id?: string | null;
+        };
+        /** ProcessResult */
+        ProcessResult: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "running" | "succeeded" | "failed";
+            document_status: components["schemas"]["DocumentStatus"];
+            /** Stage */
+            stage: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Retry Count */
+            retry_count: number;
+            /** Max Retries */
+            max_retries: number;
+            /**
+             * Retryable
+             * @description The last failure was temporary
+             */
+            retryable: boolean;
+            /**
+             * Can Retry
+             * @description Failed, temporary, and retries are left
+             */
+            can_retry: boolean;
+            /**
+             * Retry After Seconds
+             * @description Backoff before the next retry (exponential, capped)
+             */
+            retry_after_seconds: number | null;
+            /** Error Code */
+            error_code: string | null;
+            /** Error */
+            error: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Workflow Status */
+            workflow_status: string | null;
+            /**
+             * Started
+             * @description False when this call changed nothing (duplicate delivery)
+             */
+            started: boolean;
+        };
+        /**
+         * ProcessingInfo
+         * @description Where the document's latest processing job stands (for progress, retry and error display).
+         */
+        ProcessingInfo: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            state: components["schemas"]["JobStatus"];
+            /** Stage */
+            stage: string | null;
+            /** Attempt */
+            attempt: number;
+            /**
+             * Retry Count
+             * @description Retries triggered by the n8n workflow
+             */
+            retry_count: number;
+            /**
+             * Retryable
+             * @description The last failure was temporary and a retry is pending
+             */
+            retryable: boolean;
+            /** Error Code */
+            error_code: string | null;
+            /**
+             * Workflow Managed
+             * @description Processing is orchestrated by the n8n workflow
+             */
+            workflow_managed: boolean;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+        };
         /** RegisterRequest */
         RegisterRequest: {
             /**
@@ -2013,6 +2286,82 @@ export interface components {
              * @enum {string}
              */
             mode: "stale" | "failed" | "all";
+        };
+        /** RetryRequest */
+        RetryRequest: {
+            /**
+             * Organization Id
+             * Format: uuid
+             * @description The organization the event belongs to; ids of other organizations 404
+             */
+            organization_id: string;
+            /**
+             * Execution Id
+             * @description n8n execution id, for traceability
+             */
+            execution_id?: string | null;
+        };
+        /** RetryResult */
+        RetryResult: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "running" | "succeeded" | "failed";
+            document_status: components["schemas"]["DocumentStatus"];
+            /** Stage */
+            stage: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Retry Count */
+            retry_count: number;
+            /** Max Retries */
+            max_retries: number;
+            /**
+             * Retryable
+             * @description The last failure was temporary
+             */
+            retryable: boolean;
+            /**
+             * Can Retry
+             * @description Failed, temporary, and retries are left
+             */
+            can_retry: boolean;
+            /**
+             * Retry After Seconds
+             * @description Backoff before the next retry (exponential, capped)
+             */
+            retry_after_seconds: number | null;
+            /** Error Code */
+            error_code: string | null;
+            /** Error */
+            error: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Workflow Status */
+            workflow_status: string | null;
+            /**
+             * Retried
+             * @description False when this call changed nothing (already queued, running or done)
+             */
+            retried: boolean;
         };
         /**
          * Role
@@ -2224,6 +2573,31 @@ export interface components {
             /** Is Active */
             is_active?: boolean | null;
         };
+        /** WorkflowStatusUpdate */
+        WorkflowStatusUpdate: {
+            /**
+             * Organization Id
+             * Format: uuid
+             * @description The organization the event belongs to; ids of other organizations 404
+             */
+            organization_id: string;
+            /**
+             * Execution Id
+             * @description n8n execution id, for traceability
+             */
+            execution_id?: string | null;
+            /**
+             * State
+             * @description succeeded: the workflow saw the job succeed · failed: permanent failure · exhausted: retries used up
+             * @enum {string}
+             */
+            state: "succeeded" | "failed" | "exhausted";
+            /**
+             * Message
+             * @description Short reason; never document content
+             */
+            message?: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -2271,6 +2645,324 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    process_document_internal_documents__document_id__process_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Internal-Api-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProcessRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessResult"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict: the job is not in a state that allows this */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    job_status_internal_jobs__job_id__status_get: {
+        parameters: {
+            query: {
+                organization_id: string;
+            };
+            header?: {
+                "X-Internal-Api-Key"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatusRead"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict: the job is not in a state that allows this */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    retry_job_internal_jobs__job_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Internal-Api-Key"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryResult"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict: the job is not in a state that allows this */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    record_workflow_status_internal_jobs__job_id__workflow_status_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Internal-Api-Key"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowStatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatusRead"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict: the job is not in a state that allows this */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limited */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

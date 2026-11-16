@@ -18,6 +18,7 @@ from app.rag.runtime import RagRuntime, build_rag_runtime
 from app.rag.vectorstore import QdrantVectorStore
 from app.services.job_queue import ArqJobQueue, JobQueue
 from app.services.storage import LocalStorage
+from app.services.workflow import N8nWebhookNotifier, WorkflowNotifier
 
 log = structlog.get_logger(__name__)
 
@@ -34,6 +35,7 @@ class AppResources:
     qdrant: AsyncQdrantClient | None = None
     vector_store: QdrantVectorStore | None = None
     rag: RagRuntime | None = None
+    workflow_notifier: WorkflowNotifier | None = None  # set when N8N_ENABLED
     owns_connections: bool = True
 
     async def aclose(self) -> None:
@@ -68,4 +70,5 @@ async def build_resources(settings: Settings) -> AppResources:
         qdrant=qdrant,
         vector_store=QdrantVectorStore(qdrant, settings.qdrant_collection_alias),
         rag=build_rag_runtime(settings, sessionmaker, qdrant),
+        workflow_notifier=N8nWebhookNotifier(settings) if settings.n8n_enabled else None,
     )

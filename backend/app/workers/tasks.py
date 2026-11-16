@@ -15,7 +15,8 @@ from app.models.enums import JobStatus
 from app.rag.ingestion.pipeline import IngestionPipeline, RetryLater
 from app.rag.vectorstore import QdrantVectorStore
 from app.services.access_policy import document_acl_tokens
-from app.services.job_queue import INGEST_DOCUMENT
+from app.services.job_queue import INGEST_DOCUMENT, ArqJobQueue
+from app.services.workflow import WorkflowService
 
 log = structlog.get_logger(__name__)
 
@@ -117,6 +118,12 @@ async def sweep_jobs(ctx: dict[str, Any]) -> dict[str, int]:
         for job in stuck_running:
             job.status, job.error = JobStatus.QUEUED, "Worker stopped while processing; re-queued"
             recovered += 1
+        for job in stale_queued:
+            if job.workflow_managed and job.workflow_status in (None, "triggered"):
+                # The workflow never asked FastAPI to start this job (event lost, workflow inactive or crashed):
+                # take it back so the document is processed, with the worker owning its retries.
+                job.workflow_managed, job.workflow_status = False, None
+                log.warning("workflow_job_taken_over", job_id=str(job.id))
         await s.commit()
         to_enqueue = [*stale_queued, *stuck_running]
 
@@ -127,8 +134,12 @@ async def sweep_jobs(ctx: dict[str, Any]) -> dict[str, int]:
             INGEST_DOCUMENT, str(job.document_id), str(job.id), _job_id=f"ingest:{job.id}:sweep{bucket}"
         )
         requeued += enqueued is not None
-    if requeued or recovered:
-        log.info("jobs_swept", requeued=requeued, recovered_running=recovered)
+    stalled = 0
+    if settings.n8n_enabled:
+        # Jobs waiting for a retry from a workflow that stopped responding are finalized as failed.
+        stalled = await WorkflowService(ctx["sessionmaker"], settings, ArqJobQueue(ctx["redis"])).finalize_stalled()
+    if requeued or recovered or stalled:
+        log.info("jobs_swept", requeued=requeued, recovered_running=recovered, stalled=stalled)
     return {"requeued": requeued, "recovered_running": recovered}
 
 

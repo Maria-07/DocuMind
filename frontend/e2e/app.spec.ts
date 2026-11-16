@@ -62,8 +62,8 @@ test("register, upload, index, ask, cite, navigate", async ({ page }) => {
 
   // --- Status updates live until both are indexed ------------------------------------------
   const rows = page.getByRole("row");
-  await expect(rows.filter({ hasText: "Security Policy" }).getByText("Indexed")).toBeVisible({ timeout: 180_000 });
-  await expect(rows.filter({ hasText: "Revenue 2026" }).getByText("Indexed")).toBeVisible({ timeout: 180_000 });
+  await expect(rows.filter({ hasText: "Security Policy" }).getByText("Completed")).toBeVisible({ timeout: 180_000 });
+  await expect(rows.filter({ hasText: "Revenue 2026" }).getByText("Completed")).toBeVisible({ timeout: 180_000 });
   await shot(page, "03-documents-indexed");
 
   // --- Document detail shows extracted content with locations ----------------------------
@@ -267,7 +267,7 @@ test("PDF upload and in-app preview work under the CSP", async ({ page }) => {
   await dialog.locator('input[type="file"]').setInputFiles([path.join(FIXTURES, "Travel Handbook.pdf")]);
   await dialog.getByRole("button", { name: /Upload 1 file/ }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole("row").filter({ hasText: "Travel Handbook" }).getByText("Indexed")).toBeVisible({ timeout: 180_000 });
+  await expect(page.getByRole("row").filter({ hasText: "Travel Handbook" }).getByText("Completed")).toBeVisible({ timeout: 180_000 });
   await page.getByRole("link", { name: /Travel Handbook/ }).first().click();
   await page.getByRole("tab", { name: "Preview" }).click();
   const frame = page.locator('iframe[title="PDF preview"]');
@@ -408,4 +408,35 @@ test("rename and delete a conversation in dialogs", async ({ page }) => {
   // The page is still usable: the menus and dialogs left no blocking overlay behind.
   await page.getByRole("button", { name: "New conversation" }).click();
   await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
+});
+
+test("a document that cannot be processed shows why, and Retry is offered", async ({ page }) => {
+  await login(page, admin.email);
+  await nav(page, "Documents");
+  // A file that passes the upload checks (it is a PDF by its first bytes) but contains no readable text.
+  const unreadable = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+  const dialog = page.getByRole("dialog");
+  await expect(async () => {
+    await page.getByRole("button", { name: "Upload documents" }).first().click();
+    await expect(dialog).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  await dialog.locator('input[type="file"]').setInputFiles({ name: "Unreadable.pdf", mimeType: "application/pdf", buffer: unreadable });
+  await dialog.getByRole("button", { name: /Upload 1 file/ }).click();
+  await expect(dialog).toBeHidden();
+
+  const row = page.getByRole("row").filter({ hasText: "Unreadable" });
+  await expect(row.getByText("Failed", { exact: true })).toBeVisible({ timeout: 120_000 });
+  await expect(row).toContainText("No extractable text"); // the reason, right in the list
+  await expect(page.getByText(/could not be processed/)).toBeVisible(); // and a notification
+  await shot(page, "23-document-failed");
+
+  // Retry is in the row menu (and not called "Reprocess" for a failed document).
+  await page.getByRole("button", { name: "Actions for Unreadable" }).click();
+  await expect(page.getByRole("menuitem", { name: "Retry" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  // The detail page explains it and offers the same action.
+  await row.getByRole("link").first().click();
+  await expect(page.getByText("Processing failed")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry" })).toBeEnabled();
 });

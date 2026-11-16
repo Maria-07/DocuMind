@@ -132,11 +132,19 @@ Rules that apply on top of visibility:
 Every upload moves through these states:
 
 ```
-uploaded ──▶ processing ──▶ indexed      (searchable, usable in chat)
-                       └──▶ failed       (reason shown on the document's Details tab)
+uploaded ──▶ processing ──▶ indexed      (shown as "Completed": searchable, usable in chat)
+                       └──▶ failed       (reason shown in the list and on the document's page)
 ```
 
-Only **indexed** documents are used for answers.
+With the optional n8n automation switched on, two more states appear: **Queued** (waiting to start) and
+**Retrying** (a temporary problem, such as the search index being briefly unavailable; DocuMind tries again
+automatically a limited number of times). A line under the status shows the current step or the reason for a
+failure, and you are notified when a document finishes or fails.
+
+A failed document has a **Retry** action in its row menu and on its page. It is available once nothing is
+running for that document. See [Processing automation with n8n](n8n-automation.md).
+
+Only **completed** documents are used for answers.
 
 ### Categories and groups
 
@@ -166,7 +174,7 @@ The home page shows:
 3. Choose **Who can see these documents** (visibility) and, optionally, a **Category**.
 4. Upload. Files are sent in parallel, three at a time, each in its own request with its own
    progress bar, so a large file doesn't hold back the smaller ones. Each file appears in the list as
-   soon as its own upload finishes, with status *uploaded*, and moves to *indexed* on its own; the
+   soon as its own upload finishes, with status *uploaded*, and moves to *completed* on its own; the
    page updates live.
    You can add more files while others upload. You can also close the dialog: uploads in progress
    continue, and a notification reports the result.

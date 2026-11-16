@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Download, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { FileIcon, StatusBadge } from "@/components/common";
+import { FileIcon, IN_FLIGHT, ProcessingNote, StatusBadge } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -76,6 +76,7 @@ export function DocumentTable({
             <TableCell className="hidden text-muted-foreground md:table-cell">{categoryName(d.category_id) ?? "—"}</TableCell>
             <TableCell>
               <StatusBadge status={d.status} />
+              <ProcessingNote doc={d} className="mt-1" />
             </TableCell>
             <TableCell className="hidden text-muted-foreground lg:table-cell">{VISIBILITY_LABEL[d.visibility]}</TableCell>
             <TableCell className="hidden whitespace-nowrap text-muted-foreground sm:table-cell">{formatBytes(d.size_bytes)}</TableCell>
@@ -100,15 +101,15 @@ export function DocumentTable({
                   {d.can_manage && (
                     <>
                       <DropdownMenuItem
-                        disabled={d.status === "processing" || d.status === "uploaded"}
+                        disabled={IN_FLIGHT.has(d.status)}
                         onSelect={() =>
                           reprocess.mutate(d.id, {
-                            onSuccess: () => toast.success("Re-indexing started"),
+                            onSuccess: () => toast.success(d.status === "failed" ? "Retry started" : "Re-indexing started"),
                             onError: (e) => toast.error(errorMessage(e)),
                           })
                         }
                       >
-                        <RefreshCw /> Reprocess
+                        <RefreshCw /> {d.status === "failed" ? "Retry" : "Reprocess"}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem

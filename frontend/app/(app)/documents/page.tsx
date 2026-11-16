@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DocumentTable } from "@/features/documents/document-table";
 import { type DocumentFilters, useCategories, useDocuments } from "@/features/documents/queries";
 import { UploadDialog } from "@/features/documents/upload-dialog";
+import { useStatusNotifications } from "@/features/documents/use-status-notifications";
 import { errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { DocumentStatus, FileType } from "@/types";
@@ -49,6 +50,7 @@ export default function DocumentsPage() {
   };
   const { data, isLoading, isError, error, refetch } = useDocuments(filters);
   const { data: categories } = useCategories();
+  useStatusNotifications(data?.items);
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const filtered = !!(q || status !== "all" || fileType !== "all" || category !== "all");
 
@@ -79,8 +81,10 @@ export default function DocumentsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="indexed">Indexed</SelectItem>
+                  <SelectItem value="indexed">Completed</SelectItem>
                   <SelectItem value="processing">Processing</SelectItem>
+                  <SelectItem value="retrying">Retrying</SelectItem>
+                  <SelectItem value="queued">Queued</SelectItem>
                   <SelectItem value="uploaded">Uploaded</SelectItem>
                   <SelectItem value="failed">Failed</SelectItem>
                 </SelectContent>

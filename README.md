@@ -6,7 +6,7 @@ Upload, manage, search and chat with your organization's documents (PDF, DOCX, X
 Retrieval-Augmented Generation with source citations, strict per-document permissions, and a
 built-in RAG evaluation framework.
 
-> User manual: [docs/user-manual.md](docs/user-manual.md) · Architecture & design: [docs/architecture.md](docs/architecture.md) · Deployment & operations: [docs/deployment.md](docs/deployment.md) · Public demo on Vercel + AWS Lightsail: [docs/deploy-vercel-lightsail.md](docs/deploy-vercel-lightsail.md)
+> User manual: [docs/user-manual.md](docs/user-manual.md) · Architecture & design: [docs/architecture.md](docs/architecture.md) · Deployment & operations: [docs/deployment.md](docs/deployment.md) · Public demo on Vercel + AWS Lightsail: [docs/deploy-vercel-lightsail.md](docs/deploy-vercel-lightsail.md) · Processing automation with n8n: [docs/n8n-automation.md](docs/n8n-automation.md)
 
 ## Status
 
@@ -41,6 +41,13 @@ sharing dialogs (users/groups, view/manage) — see _Comparison, evaluation & an
 | Index       | Qdrant collection per embedding config (`dm_<model>_<chunking>_<hash>`), alias `chunks_active`; payload carries org, ACL tokens, page/section/sheet/rows, text                                                                |
 | Safety      | Points written `searchable=false`, flipped only when the whole version is stored; old version serves until the new one is complete; deletes hide vectors immediately and purge them; prompt-injection-like chunks are flagged |
 | Reliability | arq worker, retries with exponential backoff for transient errors, permanent failures (encrypted/corrupt/no text) reported clearly, sweep recovers lost or stuck jobs every 5 minutes                                         |
+
+**Optional automation (n8n).** With `N8N_ENABLED=true` an upload sends a metadata-only webhook to an n8n workflow
+that starts processing through authenticated `/internal` endpoints, polls the job, retries temporary failures with
+exponential backoff, records the outcome and sends an optional notification. FastAPI still does all the work and
+PostgreSQL stays the source of truth; documents move through *uploaded, queued, processing, retrying, completed
+(`indexed`), failed*, and failed ones can be retried from the UI. Off by default; if n8n is unreachable, uploads
+fall back to direct processing. Setup, the importable workflow and test results: [docs/n8n-automation.md](docs/n8n-automation.md).
 
 ### Retrieval & answers at a glance
 

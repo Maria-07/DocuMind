@@ -96,6 +96,27 @@ class Settings(BaseSettings):
     worker_max_jobs: int = Field(default=2, ge=1, le=32)
     worker_job_timeout_seconds: int = Field(default=15 * 60, ge=60)
 
+    # --- n8n workflow automation (optional) ----------------------------------------------------
+    # When enabled, an upload sends a metadata-only webhook to n8n instead of queueing ingestion directly;
+    # the "DocuMind - Document Processing Automation" workflow then drives processing through the
+    # authenticated /internal endpoints, monitors it and handles retries. Off by default: nothing changes.
+    n8n_enabled: bool = False
+    # Where FastAPI posts the upload event (the workflow's production webhook URL).
+    n8n_webhook_url: str = "http://n8n:5678/webhook/documind-document-uploaded"
+    # Sent by FastAPI to n8n (header X-DocuMind-Webhook-Secret) and checked by the workflow.
+    n8n_webhook_secret: SecretStr | None = None
+    # Sent by n8n to FastAPI (header X-Internal-Api-Key) on every /internal request.
+    internal_api_key: SecretStr | None = None
+    # Document titles can be sensitive and n8n stores execution data: they are left out of events by default.
+    n8n_include_title_in_events: bool = False
+    n8n_webhook_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    # Retries of a failed *temporary* error that n8n may trigger per job, and the exponential backoff between them.
+    n8n_max_retries: int = Field(default=3, ge=0, le=10)
+    n8n_retry_base_seconds: int = Field(default=30, ge=1, le=3600)
+    n8n_retry_max_seconds: int = Field(default=600, ge=1, le=86_400)
+    # A job waiting for n8n (retry pending) for longer than this is finalized as failed by the sweep.
+    n8n_stall_minutes: int = Field(default=30, ge=1, le=1440)
+
     # --- Retrieval (Phase 4) --------------------------------------------------------------
     reranker_enabled: bool = True
     # Chosen by tests/integration/test_retrieval_accuracy.py: the only reranker tested that improved
@@ -171,6 +192,21 @@ class Settings(BaseSettings):
                 raise ValueError("JWT_SECRET_KEY is still the .env.example placeholder")
             if self.qdrant_api_key is None or not self.qdrant_api_key.get_secret_value():
                 raise ValueError("QDRANT_API_KEY is required in production (Qdrant holds document text)")
+        return self
+
+    @model_validator(mode="after")
+    def _n8n_secrets(self) -> Settings:
+        if self.n8n_enabled:
+            for name, value in (
+                ("N8N_WEBHOOK_SECRET", self.n8n_webhook_secret),
+                ("INTERNAL_API_KEY", self.internal_api_key),
+            ):
+                if value is None or len(value.get_secret_value()) < 24:
+                    raise ValueError(
+                        f"{name} must be set to a random secret of at least 24 characters when N8N_ENABLED=true"
+                    )
+            if self.n8n_retry_max_seconds < self.n8n_retry_base_seconds:
+                raise ValueError("N8N_RETRY_MAX_SECONDS must not be smaller than N8N_RETRY_BASE_SECONDS")
         return self
 
     @model_validator(mode="after")

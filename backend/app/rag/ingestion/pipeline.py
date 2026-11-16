@@ -14,6 +14,9 @@ Guarantees
   first clears what an earlier attempt of the same version may have left.
 * **Deletes win.** If the document is deleted while processing, the new version is discarded.
 * **Fresh ACLs.** Access tokens are recomputed from PostgreSQL at finalize time.
+* **Retries have one owner.** A job started by the n8n workflow (``workflow_managed``) makes a single
+  attempt: a temporary failure ends it as ``failed`` + ``retryable`` and the workflow decides when to
+  retry (``POST /internal/jobs/{id}/retry``). Every other job is retried here by arq with backoff.
 """
 
 from __future__ import annotations
@@ -43,6 +46,30 @@ from app.services.access_policy import document_acl_tokens
 from app.services.storage import LocalStorage
 
 log = structlog.get_logger(__name__)
+
+# Error codes of temporary failures worth retrying. Permanent ones are PermanentIngestionError (corrupt or
+# encrypted files, no text): retrying the same bytes cannot succeed.
+CODE_VECTOR_STORE = "vector_store_unavailable"
+CODE_NETWORK = "network_error"
+CODE_PROCESSING = "processing_error"
+
+
+def classify_failure(exc: BaseException) -> str:
+    """A short, stable error code for a failed attempt (no document content, no exception text)."""
+    if isinstance(exc, IngestionError):
+        return exc.code
+    chain: list[str] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < 6:
+        chain.append(f"{type(current).__module__}.{type(current).__name__}".lower())
+        current = current.__cause__ or current.__context__
+    names = " ".join(chain)
+    if "qdrant" in names:
+        return CODE_VECTOR_STORE
+    if any(k in names for k in ("timeout", "connect", "network", "ssl", "dns", "socket", "httpx", "asyncpg")):
+        return CODE_NETWORK
+    return CODE_PROCESSING
+
 
 _POINT_NAMESPACE = uuid.UUID("6b3f5b8e-2f4a-4c55-9a7e-3c1f0d9e8a21")
 
@@ -77,6 +104,7 @@ class _Claim:
     index_version: int
     previous_version: int
     previous_config_id: uuid.UUID | None
+    managed: bool = False  # started by the n8n workflow: it, not arq, decides about retries
 
 
 def _now() -> datetime:
@@ -169,7 +197,10 @@ class IngestionPipeline:
             return "failed"
         except Exception as exc:
             log.exception("ingestion_attempt_failed", document_id=str(document_id), attempt=attempt)
-            code = exc.code if isinstance(exc, IngestionError) else "processing_error"
+            code = classify_failure(exc)
+            if claim.managed:
+                await self._fail_for_workflow(document_id, job_id, claim, code, type(exc).__name__)
+                return "failed"
             if attempt >= self.settings.ingestion_max_tries:
                 await self._fail(
                     document_id,
@@ -205,6 +236,11 @@ class IngestionPipeline:
             job.stage = "parse"
             job.started_at = _now()
             job.error = None
+            job.error_code = None
+            job.retryable = False
+            if job.workflow_managed:
+                job.workflow_status = "running"
+                job.workflow_updated_at = _now()
             document.status = DocumentStatus.PROCESSING
             claim = _Claim(
                 organization_id=document.organization_id,
@@ -215,6 +251,7 @@ class IngestionPipeline:
                 index_version=version,
                 previous_version=document.active_index_version,
                 previous_config_id=document.embedding_config_id,
+                managed=job.workflow_managed,
             )
             await s.commit()
         log.info("ingestion_started", document_id=str(document_id), version=version, attempt=attempt)
@@ -390,6 +427,9 @@ class IngestionPipeline:
             job.status = JobStatus.SUCCEEDED
             job.stage = None
             job.finished_at = _now()
+            job.error_code, job.retryable = None, False
+            if job.workflow_managed:
+                job.workflow_status, job.workflow_updated_at = "succeeded", _now()
             job.metrics = {
                 **{k: round(v, 3) for k, v in timings.items()},
                 "chunks": len(chunks),
@@ -429,6 +469,9 @@ class IngestionPipeline:
             job = await s.get(IngestionJob, job_id, with_for_update=True)
             if job is not None:
                 job.status, job.error, job.finished_at, job.stage = JobStatus.FAILED, f"{code}: {message}", _now(), None
+                job.error_code, job.retryable = code, False  # permanent: the same bytes will fail again
+                if job.workflow_managed:
+                    job.workflow_status, job.workflow_updated_at = "failed", _now()
             if document is not None and document.deleted_at is None:
                 if claim.previous_version > 0:
                     # A reprocess failed: the previous version is still indexed and searchable.
@@ -439,6 +482,30 @@ class IngestionPipeline:
                     document.error_message = message
             await s.commit()
         log.warning("ingestion_failed", document_id=str(document_id), code=code)
+
+    async def _fail_for_workflow(
+        self, document_id: uuid.UUID, job_id: uuid.UUID, claim: _Claim, code: str, error_type: str
+    ) -> None:
+        """End a managed attempt after a temporary failure: ``failed`` + ``retryable``; the workflow decides.
+
+        The failed attempt's partial output is removed first, so a retry never duplicates chunks or vectors.
+        """
+        await self._cleanup_attempt(document_id, claim)
+        async with self.sessionmaker() as s:
+            document = await s.get(Document, document_id, with_for_update=True)
+            job = await s.get(IngestionJob, job_id, with_for_update=True)
+            if job is not None:
+                job.status, job.finished_at, job.stage = JobStatus.FAILED, _now(), None
+                job.error, job.error_code, job.retryable = f"{code}: attempt failed ({error_type})", code, True
+                job.workflow_status, job.workflow_updated_at = "retrying", _now()
+            if document is not None and document.deleted_at is None:
+                if claim.previous_version > 0:
+                    document.error_message = f"Reprocessing hit a temporary error ({code}); a retry is pending"
+                else:
+                    document.status = DocumentStatus.RETRYING
+                    document.error_message = f"Temporary error ({code}); a retry is pending"
+            await s.commit()
+        log.warning("ingestion_attempt_failed_retryable", document_id=str(document_id), code=code)
 
     async def _requeue(self, document_id: uuid.UUID, job_id: uuid.UUID, claim: _Claim, message: str) -> None:
         await self._cleanup_attempt(document_id, claim)

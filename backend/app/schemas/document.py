@@ -24,8 +24,28 @@ class IngestionJobRead(ORMModel):
     attempt: int
     stage: str | None
     error: str | None
+    error_code: str | None = None
+    retry_count: int = 0
+    retryable: bool = False
+    workflow_managed: bool = False
+    workflow_status: str | None = None
     metrics: dict[str, Any] = Field(default_factory=dict, description="Stage timings, chunk/token counts")
     created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class ProcessingInfo(ORMModel):
+    """Where the document's latest processing job stands (for progress, retry and error display)."""
+
+    job_id: uuid.UUID = Field(validation_alias="id")
+    state: JobStatus = Field(validation_alias="status")
+    stage: str | None
+    attempt: int
+    retry_count: int = Field(description="Retries triggered by the n8n workflow")
+    retryable: bool = Field(description="The last failure was temporary and a retry is pending")
+    error_code: str | None
+    workflow_managed: bool = Field(description="Processing is orchestrated by the n8n workflow")
     started_at: datetime | None
     finished_at: datetime | None
 
@@ -50,6 +70,7 @@ class DocumentRead(ORMModel):
     updated_at: datetime
     indexed_at: datetime | None
     can_manage: bool = False
+    processing: ProcessingInfo | None = Field(default=None, description="Latest ingestion job (list and detail)")
 
 
 class DocumentDetail(DocumentRead):

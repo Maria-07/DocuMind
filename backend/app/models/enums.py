@@ -8,8 +8,13 @@ class Role(StrEnum):
 
 
 class DocumentStatus(StrEnum):
+    """Lifecycle: uploaded → (queued) → processing → indexed ("Completed"); failures: processing → (retrying →
+    processing) → failed. ``queued`` and ``retrying`` are only used for jobs driven by the n8n workflow."""
+
     UPLOADED = "uploaded"
+    QUEUED = "queued"
     PROCESSING = "processing"
+    RETRYING = "retrying"
     INDEXED = "indexed"
     FAILED = "failed"
 

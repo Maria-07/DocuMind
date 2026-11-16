@@ -22,6 +22,9 @@ AWS Lightsail (including the scripts, costs and safeguards for a public demo), f
   (`FORWARDED_ALLOW_IPS=*`) because the network layout lets only the frontend reach it. That trust
   is what gives correct per-IP rate limits and audit IPs. Do not publish the backend's port.
 - **migrate** runs `alembic upgrade head` once, before the backend and worker start.
+- **n8n** (optional, `--profile automation`, not in the default stack) orchestrates document processing: see
+  [n8n-automation.md](n8n-automation.md). Its editor is bound to `127.0.0.1:5678` and it reaches the backend's
+  `/internal` routes over the internal network; keep it off the public internet.
 - **Volumes:**
   - `postgres-data` (users, documents, chunks, audit log, evaluations)
   - `file-storage` (uploaded originals)
@@ -29,6 +32,7 @@ AWS Lightsail (including the scripts, costs and safeguards for a public demo), f
   - `redis-data`
   - `model-cache` (downloaded embedding and reranker models)
   - `caddy-data` (certificates)
+  - `n8n-data` (n8n workflows and execution history; only with the automation profile)
 
 ## 1. Prerequisites
 

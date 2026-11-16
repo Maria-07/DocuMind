@@ -11,7 +11,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health
+from app.api import health, internal
 from app.api.router import api_router
 from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.config import Settings, get_settings
@@ -94,6 +94,7 @@ def create_app(settings: Settings | None = None, resources: AppResources | None 
     app.add_middleware(RequestContextMiddleware, hsts=settings.is_production)
 
     app.include_router(health.router)
+    app.include_router(internal.router)  # n8n only; 404 unless N8N_ENABLED (see app/api/internal.py)
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     return app
 

@@ -4,7 +4,7 @@
 #
 # Only Caddy publishes ports. Two networks keep the backend unreachable except from the frontend:
 #   edge     — caddy, frontend
-#   internal — frontend, backend, worker, migrate, postgres, redis, qdrant
+#   internal — frontend, backend, worker, migrate, postgres, redis, qdrant (and n8n, when the automation profile is on)
 # (The backend trusts X-Forwarded-For because of this layout — see infrastructure/caddy/Caddyfile.)
 name: documind
 
@@ -149,6 +149,63 @@ services:
       retries: 20
     networks: [internal]
 
+  # --- Workflow automation (optional) -----------------------------------------------------------------
+  # n8n orchestrates document processing: it is told about uploads, asks the backend to start processing,
+  # monitors the job and retries temporary failures. Everything about documents stays in the backend.
+  # Not part of the default stack:   docker compose --profile automation up -d     (see docs/n8n-automation.md)
+  # Needs N8N_ENABLED=true plus N8N_ENCRYPTION_KEY, INTERNAL_API_KEY and N8N_WEBHOOK_SECRET in .env.
+  # The editor listens on 127.0.0.1 only (this machine); n8n reaches the backend over the internal network.
+  n8n:
+    image: n8nio/n8n:1.123.97
+    profiles: [automation]
+    restart: unless-stopped
+    # Fail fast, with a clear message, instead of starting with a generated key or a missing secret.
+    # (Compose would reject ${VAR:?} for every service, even with the profile off, so the check lives here.)
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        for v in N8N_ENCRYPTION_KEY DOCUMIND_INTERNAL_API_KEY DOCUMIND_WEBHOOK_SECRET; do
+          val=$$(printenv "$$v")
+          [ -n "$$val" ] || { echo "$$v is not set: fill in the n8n section of .env (see docs/n8n-automation.md)" >&2; exit 1; }
+        done
+        exec tini -- /docker-entrypoint.sh
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}  # encrypts stored credentials; losing it makes them unreadable
+      GENERIC_TIMEZONE: ${TIMEZONE:-UTC}
+      TZ: ${TIMEZONE:-UTC}
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678/}  # how the editor shows webhook URLs
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}  # true when the editor is served over HTTPS
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"  # the workflow reads its settings from the variables below
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: ${N8N_EXECUTIONS_MAX_AGE_HOURS:-336}
+      # Settings of the DocuMind workflow:
+      DOCUMIND_API_URL: ${N8N_BACKEND_URL:-http://backend:8000}
+      DOCUMIND_INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
+      DOCUMIND_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-}
+      DOCUMIND_POLL_SECONDS: ${N8N_POLL_SECONDS:-5}
+      DOCUMIND_MAX_POLLS: ${N8N_MAX_POLLS:-720}
+      NOTIFY_WEBHOOK_URL: ${N8N_NOTIFY_WEBHOOK_URL:-}
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n:/workflows:ro
+    ports:
+      - "127.0.0.1:${N8N_LOCAL_PORT:-5678}:5678"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [internal]
+
 networks:
   edge:
   internal:
@@ -161,3 +218,4 @@ volumes:
   model-cache:
   caddy-data:
   caddy-config:
+  n8n-data:

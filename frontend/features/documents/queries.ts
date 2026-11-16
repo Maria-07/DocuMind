@@ -16,6 +16,7 @@ import type {
   Page,
   UploadResponse,
 } from "@/types";
+import { IN_FLIGHT } from "@/components/common";
 
 export interface DocumentFilters {
   q?: string;
@@ -34,7 +35,7 @@ function qs(params: Record<string, string | number | undefined>) {
   return s ? `?${s}` : "";
 }
 
-const inFlight = (docs: DocumentRead[]) => docs.some((d) => d.status === "uploaded" || d.status === "processing");
+const inFlight = (docs: DocumentRead[]) => docs.some((d) => IN_FLIGHT.has(d.status));
 
 export function useDocuments(filters: DocumentFilters) {
   return useQuery({
@@ -58,9 +59,7 @@ export function useDocument(id: string) {
     queryKey: ["document", id],
     queryFn: () => apiFetch<DocumentDetail>(`documents/${id}`),
     refetchInterval: (query) =>
-      query.state.data && (query.state.data.status === "uploaded" || query.state.data.status === "processing")
-        ? 3000
-        : false,
+      query.state.data && IN_FLIGHT.has(query.state.data.status) ? 3000 : false,
   });
 }
 

@@ -145,7 +145,14 @@ def rate_limit_by_user(scope: str, limit_setting: str) -> Callable[..., Awaitabl
 
 
 def get_document_service(session: DbSession, resources: Resources) -> DocumentService:
-    return DocumentService(session, resources.settings, resources.storage, resources.job_queue, resources.vector_store)
+    return DocumentService(
+        session,
+        resources.settings,
+        resources.storage,
+        resources.job_queue,
+        resources.vector_store,
+        resources.workflow_notifier,
+    )
 
 
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]

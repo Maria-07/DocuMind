@@ -152,6 +152,18 @@ class DocumentRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def latest_jobs_for_many(self, document_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, IngestionJob]:
+        """The most recent ingestion job of each document (one query)."""
+        if not document_ids:
+            return {}
+        stmt = (
+            select(IngestionJob)
+            .where(IngestionJob.document_id.in_(document_ids))
+            .order_by(IngestionJob.document_id, IngestionJob.created_at.desc(), IngestionJob.id.desc())
+            .distinct(IngestionJob.document_id)
+        )
+        return {j.document_id: j for j in (await self.session.execute(stmt)).scalars()}
+
     async def list_jobs(self, document_id: uuid.UUID, limit: int = 50) -> Sequence[IngestionJob]:
         stmt = (
             select(IngestionJob)

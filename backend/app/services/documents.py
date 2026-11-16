@@ -40,6 +40,7 @@ from app.schemas.document import (
     DocumentUpdate,
     GrantInput,
     IngestionJobRead,
+    ProcessingInfo,
     UploadResponse,
     UploadResult,
 )
@@ -49,6 +50,7 @@ from app.services.audit import RequestMeta, record_audit
 from app.services.file_validation import FileValidationError, detect_file_type, validate_content
 from app.services.job_queue import INGEST_DOCUMENT, PURGE_DOCUMENT, SYNC_DOCUMENT_PAYLOAD, JobQueue
 from app.services.storage import LocalStorage
+from app.services.workflow import UPLOAD_EVENT, UploadEvent, WorkflowNotifier
 
 if TYPE_CHECKING:
     from app.rag.vectorstore import QdrantVectorStore
@@ -92,7 +94,9 @@ class DocumentService:
         storage: LocalStorage,
         queue: JobQueue,
         vector_store: QdrantVectorStore | None = None,
+        notifier: WorkflowNotifier | None = None,
     ) -> None:
+        self.notifier = notifier
         self.session = session
         self.settings = settings
         self.storage = storage
@@ -208,6 +212,7 @@ class DocumentService:
                 attempt=0,
                 requested_by=principal.user_id,
                 metrics={},
+                workflow_managed=self._workflow_on,
             )
             self.docs.add(document)
             self.docs.add(job)
@@ -301,7 +306,44 @@ class DocumentService:
         except Exception:  # cleanup is best effort; the reconciliation job catches leftovers
             log.warning("storage_cleanup_failed", storage_key=key)
 
+    @property
+    def _workflow_on(self) -> bool:
+        return self.settings.n8n_enabled and self.notifier is not None
+
+    async def _trigger_workflow(self, document: Document, job: IngestionJob) -> bool:
+        """Tell n8n about the new job (metadata only). False if it could not be delivered."""
+        assert self.notifier is not None
+        event = UploadEvent(
+            event_id=f"{UPLOAD_EVENT}:{job.id}",
+            document_id=document.id,
+            job_id=job.id,
+            organization_id=document.organization_id,
+            file_type=document.file_type.value,
+            size_bytes=document.size_bytes,
+            title=document.title if self.settings.n8n_include_title_in_events else None,
+            uploaded_by=job.requested_by,
+            occurred_at=datetime.now(UTC),
+        )
+        delivered = await self.notifier.document_uploaded(event)
+        if delivered:
+            job.workflow_status, job.workflow_updated_at = "triggered", datetime.now(UTC)
+        else:
+            # n8n is down or the workflow is inactive: processing must not stall. Hand the job to the worker,
+            # which then also owns its retries (the job is no longer "managed").
+            log.warning("workflow_trigger_failed", job_id=str(job.id))
+            job.workflow_managed = False
+        await self.session.commit()
+        return delivered
+
     async def _enqueue_ingestion(self, document: Document, job: IngestionJob) -> None:
+        if job.workflow_managed:
+            try:
+                if await self._trigger_workflow(document, job):
+                    return  # n8n will ask FastAPI to start processing
+            except Exception:
+                log.exception("workflow_trigger_error", job_id=str(job.id))
+                job.workflow_managed = False
+                await self.session.commit()
         try:
             await self.queue.enqueue(INGEST_DOCUMENT, str(document.id), str(job.id), job_id=f"ingest:{job.id}")
         except Exception:
@@ -316,9 +358,13 @@ class DocumentService:
     ) -> tuple[builtins.list[DocumentRead], int]:
         documents, total = await self.docs.list_visible(principal, filters, offset=page.offset, limit=page.page_size)
         grants = await self.docs.grants_for_many([d.id for d in documents])
+        jobs = await self.docs.latest_jobs_for_many([d.id for d in documents])
         items = [
             DocumentRead.model_validate(d).model_copy(
-                update={"can_manage": can_manage(principal, d, grants.get(d.id, []))}
+                update={
+                    "can_manage": can_manage(principal, d, grants.get(d.id, [])),
+                    "processing": ProcessingInfo.model_validate(jobs[d.id]) if d.id in jobs else None,
+                }
             )
             for d in documents
         ]
@@ -331,6 +377,7 @@ class DocumentService:
             update={
                 "can_manage": can_manage(principal, document, grants),
                 "latest_job": IngestionJobRead.model_validate(latest) if latest else None,
+                "processing": ProcessingInfo.model_validate(latest) if latest else None,
             }
         )
 
@@ -450,8 +497,11 @@ class DocumentService:
     async def reprocess(self, principal: Principal, document_id: uuid.UUID, meta: RequestMeta) -> IngestionJobRead:
         document, _ = await self._get_manageable(principal, document_id)
         latest = await self.docs.latest_job(document.id)
-        if document.status == DocumentStatus.PROCESSING or (
-            latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+        waiting_for_retry = latest is not None and latest.status == JobStatus.FAILED and latest.retryable
+        if (
+            document.status in (DocumentStatus.PROCESSING, DocumentStatus.QUEUED, DocumentStatus.RETRYING)
+            or waiting_for_retry
+            or (latest is not None and latest.status in (JobStatus.QUEUED, JobStatus.RUNNING))
         ):
             raise ConflictError("This document is already queued or processing", code="reprocess_in_progress")
 
@@ -462,8 +512,12 @@ class DocumentService:
             attempt=0,
             requested_by=principal.user_id,
             metrics={},
+            workflow_managed=self._workflow_on,
         )
         self.docs.add(job)
+        if job.workflow_managed and document.status == DocumentStatus.FAILED:
+            # The workflow needs a moment to start the job: show "queued" now instead of a stale "failed".
+            document.status = DocumentStatus.QUEUED
         record_audit(
             self.session,
             action="document.reprocess_requested",

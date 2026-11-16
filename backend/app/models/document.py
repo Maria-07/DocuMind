@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -135,3 +136,13 @@ class IngestionJob(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     requested_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # --- driven by the n8n workflow (see app.services.workflow); all default to "not managed" ---
+    workflow_managed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    workflow_status: Mapped[str | None] = mapped_column(
+        String(24)
+    )  # triggered | running | retrying | succeeded | failed
+    workflow_execution_id: Mapped[str | None] = mapped_column(String(100))
+    workflow_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
