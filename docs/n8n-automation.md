@@ -113,6 +113,9 @@ Backend (`.env`, see `.env.example`):
 | `N8N_STALL_MINUTES` | `30` | A retry that never arrives is finalized as failed after this long |
 | `N8N_INCLUDE_TITLE_IN_EVENTS` | `false` | Send the document title in events. Off by default: titles can be sensitive and n8n stores execution data |
 | `N8N_NOTIFY_WEBHOOK_URL` | | Optional Slack-compatible incoming-webhook URL for notifications |
+| `N8N_NOTIFY_EMAIL_TO` | | Recipient(s) for e-mail notifications, comma-separated; empty = no e-mail (see [E-mail notifications](#e-mail-notifications)) |
+| `N8N_NOTIFY_EMAIL_FROM` | | Sender address; empty = the recipient |
+| `N8N_NOTIFY_EMAIL_ON` | `all` | `all`: completed, failed and needs-attention; `problems`: failures and needs-attention only |
 
 n8n container (set from the same `.env`; the compose service maps them to the names the workflow reads):
 
@@ -125,6 +128,7 @@ n8n container (set from the same `.env`; the compose service maps them to the na
 | `N8N_POLL_SECONDS` | `DOCUMIND_POLL_SECONDS` | `5` |
 | `N8N_MAX_POLLS` | `DOCUMIND_MAX_POLLS` | `720` (one hour at 5 s) |
 | `N8N_NOTIFY_WEBHOOK_URL` | `NOTIFY_WEBHOOK_URL` | empty (no notification) |
+| `N8N_NOTIFY_EMAIL_TO`, `N8N_NOTIFY_EMAIL_FROM`, `N8N_NOTIFY_EMAIL_ON` | `NOTIFY_EMAIL_TO`, `NOTIFY_EMAIL_FROM`, `NOTIFY_EMAIL_ON` | empty, empty, `all` |
 | `TIMEZONE`, `N8N_HOST`, `N8N_PROTOCOL`, `N8N_PUBLIC_URL`, `N8N_SECURE_COOKIE`, `N8N_LOCAL_PORT`, `N8N_EXECUTIONS_MAX_AGE_HOURS` | n8n's own settings | `UTC`, `localhost`, `http`, `http://localhost:5678/`, `false`, `5678`, `336` (execution history is pruned after 14 days) |
 
 The compose service uses the pinned image `n8nio/n8n:1.123.97`, a persistent volume (`n8n-data`) and
@@ -133,7 +137,7 @@ The compose service uses the pinned image `n8nio/n8n:1.123.97`, a persistent vol
 
 ## The workflow
 
-**DocuMind - Document Processing Automation** (`infrastructure/n8n/documind-document-processing.workflow.json`, 22 nodes):
+**DocuMind - Document Processing Automation** (`infrastructure/n8n/documind-document-processing.workflow.json`, 23 nodes):
 
 | # | Node | What it does |
 |---|---|---|
@@ -150,7 +154,7 @@ The compose service uses the pinned image `n8nio/n8n:1.123.97`, a persistent vol
 | 10 | Wait Before Retry -> Retry Job | Waits the backoff the backend advised (`retry_after_seconds`: base x 2^n, capped), then `POST /internal/jobs/{id}/retry`, then back to polling. A hard cap (`N8N_MAX_RETRIES`) lives in the backend, so the loop cannot run forever |
 | 11 | Record Success / Failure / Exhausted | `POST /internal/jobs/{id}/workflow-status` |
 | 12 | Build Notice -> Notification Configured? -> Send Notification | A short message: the outcome, the document id, the file type, never contents. Sent to `N8N_NOTIFY_WEBHOOK_URL` if set. Errors here are swallowed: **notification failures never affect processing** |
-| - | Send Email (optional) | Disabled. To get e-mail: add an SMTP credential in n8n, set the addresses, enable the node. (DocuMind itself has no e-mail integration to reuse) |
+| 12b | Email Configured? -> Send Email | Runs only when `N8N_NOTIFY_EMAIL_TO` is set (and, with `N8N_NOTIFY_EMAIL_ON=problems`, only for failures). Needs an SMTP credential, see below. Errors are swallowed too |
 
 HTTP nodes retry three times on network errors, and every call is idempotent on the backend, so a repeated
 call (a retry after a timeout, a duplicated webhook) changes nothing.
@@ -214,6 +218,26 @@ current stage, `retry_count`, `retryable`, `error_code` (a short stable code suc
 - **Manual retry:** a failed document has a **Retry** action (documents list and detail page). It creates a new
   job, announces it to n8n again, and the document shows *queued* at once. It is refused while a retry is
   pending or a job is running (`409 reprocess_in_progress`).
+
+## E-mail notifications
+
+DocuMind has no e-mail integration of its own, so the workflow sends mail through n8n's **Send Email** node. Until
+you set this up, **no e-mail is sent** (the workflow only notifies the optional webhook). Passwords never go in
+`.env` or in the workflow file: the SMTP login is an n8n credential, encrypted with `N8N_ENCRYPTION_KEY`.
+
+1. In the n8n editor open **Credentials -> Create credential -> SMTP** and fill in your mail server, for example
+   Gmail: user = your address, password = an **app password** (Google Account -> Security -> 2-Step Verification ->
+   App passwords; your normal password does not work), host `smtp.gmail.com`, port `465`, SSL on. Other providers
+   list their SMTP host and port in their help pages. Use **Test** to check it.
+2. Open the **DocuMind - Document Processing Automation** workflow, click the **Send Email** node and pick that
+   credential. Save.
+3. In `.env` set `N8N_NOTIFY_EMAIL_TO=you@example.com` (and optionally `N8N_NOTIFY_EMAIL_FROM`; Gmail only sends
+   from the logged-in address), then recreate the n8n container so it sees the new variables:
+   `docker compose -f infrastructure/docker-compose.yml --env-file .env --profile automation up -d n8n`.
+4. Upload a document: the mail arrives within a few seconds. `N8N_NOTIFY_EMAIL_ON=problems` limits it to failures.
+
+If no mail arrives, open **Executions** in n8n and the run's **Send Email** node: it shows the SMTP error (wrong
+password, blocked port). Mail problems never change a document's status.
 
 ## Security
 

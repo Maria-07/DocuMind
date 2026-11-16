@@ -193,6 +193,9 @@ services:
       DOCUMIND_POLL_SECONDS: ${N8N_POLL_SECONDS:-5}
       DOCUMIND_MAX_POLLS: ${N8N_MAX_POLLS:-720}
       NOTIFY_WEBHOOK_URL: ${N8N_NOTIFY_WEBHOOK_URL:-}
+      NOTIFY_EMAIL_TO: ${N8N_NOTIFY_EMAIL_TO:-}
+      NOTIFY_EMAIL_FROM: ${N8N_NOTIFY_EMAIL_FROM:-}
+      NOTIFY_EMAIL_ON: ${N8N_NOTIFY_EMAIL_ON:-all}
     volumes:
       - n8n-data:/home/node/.n8n
       - ./n8n:/workflows:ro

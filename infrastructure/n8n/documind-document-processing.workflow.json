@@ -1,4 +1,5 @@
 {
+  "id": "documindDocProc01",
   "name": "DocuMind - Document Processing Automation",
   "nodes": [
     {
@@ -658,24 +659,67 @@
     },
     {
       "parameters": {
-        "fromEmail": "documind@example.com",
-        "toEmail": "admin@example.com",
-        "subject": "=DocuMind: {{ $json.kind }}",
-        "emailFormat": "text",
-        "text": "={{ $json.text }}",
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9e5c5e18-6ce1-5a7d-a476-78cf83cf479f",
+              "leftValue": "={{ $env.NOTIFY_EMAIL_TO || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "f7c3547d-be0c-50fb-a5b3-f6977aa13258",
+              "leftValue": "={{ ($env.NOTIFY_EMAIL_ON || 'all') === 'all' || $json.severity !== 'success' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
         "options": {}
       },
-      "id": "758f7e74-af6c-5c22-8e6b-9eee05ee30fd",
-      "name": "Send Email (optional)",
+      "id": "66616482-bf7b-58dc-8eda-03414e19eb7b",
+      "name": "Email Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        1000
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.NOTIFY_EMAIL_FROM || $env.NOTIFY_EMAIL_TO }}",
+        "toEmail": "={{ $env.NOTIFY_EMAIL_TO }}",
+        "subject": "={{ ($json.severity === 'success' ? 'Completed' : ($json.severity === 'error' ? 'FAILED' : 'Needs attention')) + ' - DocuMind document processing' }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text + '\n\nDocument id: ' + $json.document_id + '\nJob id: ' + $json.job_id + '\nn8n execution: ' + $json.execution_id }}",
+        "options": {}
+      },
+      "id": "adcdfee1-8082-56c9-ab1a-dcd71a6b77f4",
+      "name": "Send Email",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
         2860,
-        920
+        1000
       ],
-      "disabled": true,
       "onError": "continueRegularOutput",
-      "notes": "Disabled. To get e-mail: add an SMTP credential in n8n, set the addresses, enable this node."
+      "notes": "Needs an SMTP credential (create it once in n8n: Credentials -> SMTP). Failures here never affect processing."
     },
     {
       "parameters": {
@@ -926,6 +970,11 @@
             "node": "Notification Configured?",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Email Configured?",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -935,6 +984,17 @@
         [
           {
             "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Configured?": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
             "type": "main",
             "index": 0
           }

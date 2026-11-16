@@ -49,8 +49,7 @@ def test_every_node_is_reachable_from_the_webhook(workflow: dict) -> None:  # ty
             seen.add(node)
             todo += graph.get(node, [])
     unreachable = {n["name"] for n in workflow["nodes"] if n["type"] != "n8n-nodes-base.stickyNote"} - seen
-    # The optional e-mail node is disabled and deliberately not connected.
-    assert unreachable <= {"Send Email (optional)"}, unreachable
+    assert not unreachable, unreachable
 
 
 def test_webhook_path_matches_the_backend_default(workflow: dict) -> None:  # type: ignore[type-arg]
@@ -89,7 +88,8 @@ def test_notification_failures_cannot_stop_processing(workflow: dict) -> None:  
     # The outcome is recorded before anything is sent, and recording problems do not block the notice either.
     for name in ("Record Success", "Record Failure", "Record Exhausted"):
         assert nodes[name]["onError"] == "continueRegularOutput"
-    assert nodes["Send Email (optional)"]["disabled"] is True
+    assert nodes["Send Email"]["onError"] == "continueRegularOutput"
+    assert "credentials" not in nodes["Send Email"]  # the SMTP login is created in n8n, never stored in the file
 
 
 def test_compose_runs_n8n_only_under_a_profile_and_publishes_it_locally() -> None:
